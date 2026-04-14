@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/forge_cli",
+    "crates/forge_driver",
+    "crates/forge_diagnostics",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Forge Contributors"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+ariadne = "0.4"
+forge_driver = { path = "crates/forge_driver" }
+forge_diagnostics = { path = "crates/forge_diagnostics" }

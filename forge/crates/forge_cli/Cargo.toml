@@ -1,0 +1,21 @@
+[package]
+name = "forge_cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "forge"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+forge_driver.workspace = true
+forge_diagnostics.workspace = true
+
+[dev-dependencies]
+libtest-mimic = "0.7"
+
+[[test]]
+name = "lit"
+path = "tests/lit.rs"
+harness = false
