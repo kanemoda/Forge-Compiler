@@ -24,6 +24,7 @@
 //! assert_eq!(diag.span, 21..22);
 //! ```
 
+use std::io::IsTerminal;
 use std::ops::Range;
 
 use ariadne::{Color, Config, Label as AriadneLabel, Report, ReportKind, Source};
@@ -164,13 +165,19 @@ impl Diagnostic {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Render a slice of diagnostics to **stderr** with ANSI colour codes.
+/// Render a slice of diagnostics to **stderr**.
+///
+/// ANSI colour codes are emitted only when stderr is attached to a terminal —
+/// when it is piped to a file or captured by a test harness, the output is
+/// plain text so downstream substring matchers (e.g. the lit-style test
+/// runner) are not fooled by escape sequences inside the rendered message.
 ///
 /// This is the standard production path.  For testing or LSP use,
 /// call [`render_diagnostics_to_string`] instead.
 pub fn render_diagnostics(source: &str, filename: &str, diagnostics: &[Diagnostic]) {
+    let use_color = std::io::stderr().is_terminal();
     for diag in diagnostics {
-        write_report(diag, filename, source, &mut std::io::stderr(), true)
+        write_report(diag, filename, source, &mut std::io::stderr(), use_color)
             .expect("failed to write diagnostic to stderr");
     }
 }

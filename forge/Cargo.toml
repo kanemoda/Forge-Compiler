@@ -4,6 +4,7 @@ members = [
     "crates/forge_cli",
     "crates/forge_driver",
     "crates/forge_diagnostics",
+    "crates/forge_lexer",
 ]
 
 [workspace.package]
@@ -17,3 +18,4 @@ clap = { version = "4", features = ["derive"] }
 ariadne = "0.4"
 forge_driver = { path = "crates/forge_driver" }
 forge_diagnostics = { path = "crates/forge_diagnostics" }
+forge_lexer = { path = "crates/forge_lexer" }

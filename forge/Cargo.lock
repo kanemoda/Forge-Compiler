@@ -136,6 +136,14 @@ name = "forge_driver"
 version = "0.1.0"
 dependencies = [
  "forge_diagnostics",
+ "forge_lexer",
+]
+
+[[package]]
+name = "forge_lexer"
+version = "0.1.0"
+dependencies = [
+ "forge_diagnostics",
 ]
 
 [[package]]

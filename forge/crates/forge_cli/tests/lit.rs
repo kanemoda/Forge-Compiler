@@ -17,9 +17,15 @@
 //! | `// CHECK: <str>` | `<str>` must appear as a substring of stdout. |
 //! | `// ERROR: <str>` | `<str>` must appear as a substring of stderr. |
 //!
-//! A test passes when every RUN command exits 0 and every CHECK/ERROR
-//! pattern is found in the corresponding output stream. A file with no
-//! `// RUN:` directive is an unconditional failure.
+//! A test passes when:
+//!
+//! * every RUN command exits 0 — **unless** the file has at least one
+//!   `// ERROR:` directive, in which case a non-zero exit is also accepted
+//!   (the ERROR patterns themselves still have to match stderr); and
+//! * every CHECK / ERROR pattern is found in the corresponding output
+//!   stream.
+//!
+//! A file with no `// RUN:` directive is an unconditional failure.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -173,7 +179,12 @@ fn execute_run(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if !output.status.success() {
+    // Files carrying `// ERROR:` directives are expected-failure tests:
+    // the compiler *should* emit diagnostics and may exit non-zero.  For
+    // any other file we still require a clean exit so that a regression
+    // which silently fails the pipeline surfaces as a test failure rather
+    // than a missing-CHECK failure.
+    if !output.status.success() && errors.is_empty() {
         return Err(Failed::from(format!(
             "command exited with {status}\n\
              --- stdout ---\n{stdout}\
