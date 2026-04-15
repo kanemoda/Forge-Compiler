@@ -167,3 +167,39 @@ Diagnostic::error("expected ';' after expression")
 - Z3 required for verification: `sudo apt install libz3-dev`
 - System headers needed for #include tests: `sudo apt install libc6-dev`
 - Cross-compilation for AArch64: `sudo apt install gcc-aarch64-linux-gnu`
+
+## Test Organization Rules (MANDATORY)
+
+### Where to put tests
+
+**NEVER create `#[cfg(test)] mod tests { }` blocks inside production source files.**
+
+All tests go in `src/tests/` submodule structure:
+
+```
+crates/<crate>/
+├── src/
+│   ├── lib.rs          ← contains only: #[cfg(test)] mod tests;
+│   ├── whatever.rs     ← production code ONLY, zero test code
+│   └── tests/
+│       ├── mod.rs      ← declares submodules
+│       ├── helpers.rs  ← shared test utilities (NOT a test file)
+│       ├── feature_a.rs
+│       └── feature_b.rs
+```
+
+### Rules
+
+1. **New crate?** Create `src/tests/` from the start. Never inline.
+2. **New feature?** Add tests to the matching `src/tests/<feature>.rs` file. If no matching file exists, create one and add it to `mod.rs`.
+3. **Shared helpers** (lex-and-assert, run-preprocessor, etc.) go in `src/tests/helpers.rs`. Other test files import via `use super::helpers::*;`.
+4. **Test file imports:** Use `use crate::{...};` for the crate's own types. Use `use super::helpers::*;` for shared helpers.
+5. **Exception:** Tests that MUST access private fields/methods (not `pub` or `pub(crate)`) may stay inline in that specific source file. Max ~15 tests per inline block. If it grows beyond that, make the needed items `pub(crate)` and move tests out.
+6. **External integration tests** (`crates/<crate>/tests/*.rs`) are for subprocess/CLI tests only (like system_headers.rs). Unit tests always go in `src/tests/`.
+7. **Lit tests** stay in `tests/lit/<phase>/`. These are file-driven tests, not Rust unit tests.
+
+### Naming
+
+- Test files: named after the FEATURE, not the source file. `macros.rs` not `preprocessor_tests.rs`.
+- Test functions: `snake_case_describing_behavior`. `stringify_escapes_backslash` not `test_3`.
+- helpers.rs is NOT a test file — no `#[test]` functions in it.

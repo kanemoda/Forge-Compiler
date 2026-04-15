@@ -70,7 +70,7 @@ pub mod numeric;
 pub mod token;
 
 #[cfg(test)]
-mod validation;
+mod tests;
 
 pub use forge_diagnostics::Diagnostic;
 pub use lexer::{lex_fragment, lookup_keyword, Lexer};
@@ -115,31 +115,5 @@ impl fmt::Display for Span {
     /// Renders the span as `"start..end"`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}..{}", self.start, self.end)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn span_display() {
-        assert_eq!(Span::new(0, 0).to_string(), "0..0");
-        assert_eq!(Span::new(5, 10).to_string(), "5..10");
-        assert_eq!(Span::new(123, 456).to_string(), "123..456");
-    }
-
-    #[test]
-    fn span_len_and_is_empty() {
-        assert_eq!(Span::new(0, 0).len(), 0);
-        assert!(Span::new(0, 0).is_empty());
-        assert_eq!(Span::new(3, 7).len(), 4);
-        assert!(!Span::new(3, 7).is_empty());
-    }
-
-    #[test]
-    fn span_range() {
-        let s = Span::new(5, 10);
-        assert_eq!(s.range(), 5_usize..10_usize);
     }
 }
