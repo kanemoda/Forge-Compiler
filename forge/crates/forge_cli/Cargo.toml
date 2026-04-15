@@ -19,3 +19,7 @@ libtest-mimic = "0.7"
 name = "lit"
 path = "tests/lit.rs"
 harness = false
+
+[[test]]
+name = "preprocess_cli"
+path = "tests/preprocess_cli.rs"

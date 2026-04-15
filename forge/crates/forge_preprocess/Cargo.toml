@@ -1,9 +1,11 @@
 [package]
-name = "forge_driver"
+name = "forge_preprocess"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 forge_diagnostics.workspace = true
 forge_lexer.workspace = true
-forge_preprocess.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

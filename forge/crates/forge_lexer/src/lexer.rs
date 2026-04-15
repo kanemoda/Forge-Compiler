@@ -253,7 +253,7 @@ impl<'a> Lexer<'a> {
                 // Any real whitespace around the splice still sets
                 // `has_leading_space` on its own, so we do not touch
                 // either flag here.
-                b'\\' if matches!(self.peek_at(1), Some(b'\n') | Some(b'\r')) => {
+                b'\\' if matches!(self.peek_at(1), Some(b'\n' | b'\r')) => {
                     self.pos += 1; // consume `\`
                     match self.peek() {
                         Some(b'\n') => self.pos += 1,
@@ -579,6 +579,44 @@ pub fn lookup_keyword(text: &str) -> Option<TokenKind> {
         "_Thread_local" => TokenKind::ThreadLocal,
         _ => return None,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Fragment helper
+// ---------------------------------------------------------------------------
+
+/// Lex a short text fragment into tokens, with no file context.
+///
+/// Used by the preprocessor to re-lex the concatenated spelling produced
+/// by a `##` token-pasting operator: the text is not a whole file, there
+/// is no preceding context to carry, and the trailing [`TokenKind::Eof`]
+/// sentinel that [`Lexer::tokenize`] tacks on would be a nuisance for
+/// callers that only want the substantive tokens.
+///
+/// The returned vector is exactly the non-[`TokenKind::Eof`] tokens the
+/// lexer would have produced for `input`, in order.  Diagnostics
+/// accumulated during the scan are discarded; a caller that needs them
+/// can build a [`Lexer`] directly.
+///
+/// # Examples
+///
+/// ```
+/// use forge_lexer::{lex_fragment, TokenKind};
+///
+/// let toks = lex_fragment("foo");
+/// assert_eq!(toks.len(), 1);
+/// assert!(matches!(toks[0].kind, TokenKind::Identifier(ref s) if s == "foo"));
+///
+/// // Empty fragments produce zero tokens.
+/// assert!(lex_fragment("").is_empty());
+/// ```
+pub fn lex_fragment(input: &str) -> Vec<Token> {
+    let mut lexer = Lexer::new(input);
+    let mut tokens = lexer.tokenize();
+    if matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)) {
+        tokens.pop();
+    }
+    tokens
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,5 +1125,51 @@ mod tests {
         assert!(toks[0].at_start_of_line);
         assert_eq!(toks[1].kind, TokenKind::Identifier("include".to_string()));
         assert!(!toks[1].at_start_of_line);
+    }
+
+    // ---------- lex_fragment ----------
+
+    #[test]
+    fn lex_fragment_strips_trailing_eof() {
+        let toks = lex_fragment("foo");
+        assert_eq!(toks.len(), 1);
+        assert!(matches!(toks[0].kind, TokenKind::Identifier(ref s) if s == "foo"));
+    }
+
+    #[test]
+    fn lex_fragment_of_empty_string_is_empty() {
+        assert!(lex_fragment("").is_empty());
+    }
+
+    #[test]
+    fn lex_fragment_handles_punctuation_and_literals() {
+        let toks = lex_fragment("12 + 3");
+        assert_eq!(toks.len(), 3);
+        assert!(matches!(
+            toks[0].kind,
+            TokenKind::IntegerLiteral { value: 12, .. }
+        ));
+        assert!(matches!(toks[1].kind, TokenKind::Plus));
+        assert!(matches!(
+            toks[2].kind,
+            TokenKind::IntegerLiteral { value: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn lex_fragment_of_concatenation_result_produces_single_identifier() {
+        // Simulates what the preprocessor does for `a##b` → `ab`.
+        let toks = lex_fragment("ab");
+        assert_eq!(toks.len(), 1);
+        assert!(matches!(toks[0].kind, TokenKind::Identifier(ref s) if s == "ab"));
+    }
+
+    #[test]
+    fn lex_fragment_of_two_tokens_reports_both() {
+        // `12` `+` produces two tokens — useful for the preprocessor to
+        // notice that a paste result is not a single valid preprocessing
+        // token and warn.
+        let toks = lex_fragment("1 2");
+        assert_eq!(toks.len(), 2);
     }
 }

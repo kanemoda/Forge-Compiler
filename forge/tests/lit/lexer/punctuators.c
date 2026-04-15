@@ -70,9 +70,9 @@
 // CHECK: '^='
 // CHECK: '|='
 //
-// Preprocessor hash and the `##` token-paste operator.
-// CHECK: '#'
-// CHECK: '##'
+// (`#` and `##` are preprocessor-only tokens and are consumed by the
+// preprocessor before the lexer output reaches this harness — their
+// recognition is exercised from `tests/lit/preprocess/` instead.)
 
 ( ) { } [ ]
 . ->
@@ -84,4 +84,3 @@
 ? : ; ... ,
 = *= /= %= += -=
 <<= >>= &= ^= |=
-# ##

@@ -1,3 +1,6 @@
+// Pedantic lints we've audited and accept as style preferences for this example.
+#![allow(clippy::cast_precision_loss)]
+
 //! Synthetic lexer throughput benchmark.
 //!
 //! Builds a realistic ~50 000-line C translation unit in memory, then times

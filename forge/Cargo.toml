@@ -5,6 +5,7 @@ members = [
     "crates/forge_driver",
     "crates/forge_diagnostics",
     "crates/forge_lexer",
+    "crates/forge_preprocess",
 ]
 
 [workspace.package]
@@ -19,3 +20,4 @@ ariadne = "0.4"
 forge_driver = { path = "crates/forge_driver" }
 forge_diagnostics = { path = "crates/forge_diagnostics" }
 forge_lexer = { path = "crates/forge_lexer" }
+forge_preprocess = { path = "crates/forge_preprocess" }

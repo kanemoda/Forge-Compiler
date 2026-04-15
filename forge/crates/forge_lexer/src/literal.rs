@@ -63,7 +63,7 @@ enum EscapeResult {
     Error,
 }
 
-impl<'a> Lexer<'a> {
+impl Lexer<'_> {
     // ---------------------------------------------------------------------
     // Public entry points (package-private — driven from `lexer.rs`).
     // ---------------------------------------------------------------------
@@ -83,21 +83,19 @@ impl<'a> Lexer<'a> {
 
         loop {
             match self.peek() {
-                None => break,
+                // EOF, or a raw newline — both terminate the literal without
+                // being consumed.  C forbids unescaped newlines in literals.
+                None | Some(b'\n' | b'\r') => break,
                 Some(b'\'') => {
                     self.pos += 1;
                     closed = true;
                     break;
                 }
-                // A raw newline terminates the literal without being
-                // consumed — C forbids unescaped newlines in literals.
-                Some(b'\n') | Some(b'\r') => break,
                 Some(b'\\') => match self.consume_escape_sequence() {
                     EscapeResult::Value(v) => values.push(v),
                     // Line continuation inside a character constant is
                     // rare but legal (translation phase 2); accept it.
-                    EscapeResult::LineContinuation => {}
-                    EscapeResult::Error => {}
+                    EscapeResult::LineContinuation | EscapeResult::Error => {}
                 },
                 Some(_) => {
                     let ch = self.consume_unicode_char();
@@ -139,17 +137,16 @@ impl<'a> Lexer<'a> {
 
         loop {
             match self.peek() {
-                None => break,
+                // EOF or a raw newline — both terminate the literal.
+                None | Some(b'\n' | b'\r') => break,
                 Some(b'"') => {
                     self.pos += 1;
                     closed = true;
                     break;
                 }
-                Some(b'\n') | Some(b'\r') => break,
                 Some(b'\\') => match self.consume_escape_sequence() {
                     EscapeResult::Value(v) => push_code_point(&mut value, v),
-                    EscapeResult::LineContinuation => {}
-                    EscapeResult::Error => {}
+                    EscapeResult::LineContinuation | EscapeResult::Error => {}
                 },
                 Some(_) => {
                     let ch = self.consume_unicode_char();
@@ -391,8 +388,8 @@ fn combine_char_values(
     match values.len() {
         0 => 0,
         1 => values[0],
-        _ => match prefix {
-            CharPrefix::None => {
+        _ => {
+            if prefix == CharPrefix::None {
                 // Pack bytes left-to-right, per GCC's implementation-
                 // defined behaviour for multi-character constants.
                 let mut result: u32 = 0;
@@ -400,8 +397,7 @@ fn combine_char_values(
                     result = result.wrapping_shl(8) | (*v & 0xFF);
                 }
                 result
-            }
-            _ => {
+            } else {
                 lexer.emit_diagnostic(
                     Diagnostic::warning("multi-character wide character constant")
                         .span(open_pos..lexer.pos)
@@ -410,7 +406,7 @@ fn combine_char_values(
                 );
                 values[0]
             }
-        },
+        }
     }
 }
 

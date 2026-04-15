@@ -49,7 +49,7 @@ use forge_diagnostics::Diagnostic;
 use crate::lexer::Lexer;
 use crate::token::{FloatSuffix, IntSuffix, TokenKind};
 
-impl<'a> Lexer<'a> {
+impl Lexer<'_> {
     // ---------------------------------------------------------------------
     // Public entry point.
     // ---------------------------------------------------------------------
@@ -70,7 +70,7 @@ impl<'a> Lexer<'a> {
         }
 
         // `0x` or `0X` — hex integer or hex float.
-        if self.peek() == Some(b'0') && matches!(self.peek_at(1), Some(b'x') | Some(b'X')) {
+        if self.peek() == Some(b'0') && matches!(self.peek_at(1), Some(b'x' | b'X')) {
             return self.lex_hex_number(start);
         }
 
@@ -115,10 +115,9 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(b'.') => match self.peek_at(1) {
                 // `1.5` — digit after dot: definitely a float.
-                Some(b'0'..=b'9') => true,
                 // `1.e5` — exponent follows dot: float with empty
                 // fractional part.
-                Some(b'e') | Some(b'E') => true,
+                Some(b'0'..=b'9' | b'e' | b'E') => true,
                 // `1.method` or `1._x` — ident-start letter means the
                 // dot belongs to member access, not the number.
                 Some(b'_' | b'a'..=b'z' | b'A'..=b'Z') => false,
@@ -127,7 +126,7 @@ impl<'a> Lexer<'a> {
                 _ => true,
             },
             // `1e5` — decimal float without a dot.
-            Some(b'e') | Some(b'E') => true,
+            Some(b'e' | b'E') => true,
             _ => false,
         }
     }
@@ -168,11 +167,11 @@ impl<'a> Lexer<'a> {
     /// appears but no digits follow; the cursor is still advanced past
     /// the `e`/sign so the overall literal span is accurate.
     fn maybe_consume_decimal_exponent(&mut self, lit_start: usize) {
-        if !matches!(self.peek(), Some(b'e') | Some(b'E')) {
+        if !matches!(self.peek(), Some(b'e' | b'E')) {
             return;
         }
         self.pos += 1; // consume e / E
-        if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+        if matches!(self.peek(), Some(b'+' | b'-')) {
             self.pos += 1;
         }
         let digits_start = self.pos;
@@ -203,7 +202,7 @@ impl<'a> Lexer<'a> {
         // decimal side, which has to disambiguate against member access)
         // because member access after a hex integer is vanishingly rare
         // and the ambiguity would mask malformed hex-float literals.
-        let is_float = matches!(self.peek(), Some(b'.') | Some(b'p') | Some(b'P'));
+        let is_float = matches!(self.peek(), Some(b'.' | b'p' | b'P'));
         if is_float {
             return self.finish_hex_float(start, int_start, int_end, had_int_digits);
         }
@@ -326,10 +325,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn consume_hex_digits(&mut self) {
-        while matches!(
-            self.peek(),
-            Some(b'0'..=b'9') | Some(b'a'..=b'f') | Some(b'A'..=b'F')
-        ) {
+        while matches!(self.peek(), Some(b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')) {
             self.pos += 1;
         }
     }
@@ -419,16 +415,15 @@ impl<'a> Lexer<'a> {
     /// suffix.  `lit_start` is used only for the diagnostic span.
     fn parse_f64_body(&mut self, lit_start: usize, body_start: usize, body_end: usize) -> f64 {
         let body = &self.source[body_start..body_end];
-        match body.parse::<f64>() {
-            Ok(v) => v,
-            Err(_) => {
-                self.emit_diagnostic(
-                    Diagnostic::error(format!("invalid floating-point literal `{body}`"))
-                        .span(lit_start..self.pos)
-                        .label("could not parse as a floating-point value"),
-                );
-                0.0
-            }
+        if let Ok(v) = body.parse::<f64>() {
+            v
+        } else {
+            self.emit_diagnostic(
+                Diagnostic::error(format!("invalid floating-point literal `{body}`"))
+                    .span(lit_start..self.pos)
+                    .label("could not parse as a floating-point value"),
+            );
+            0.0
         }
     }
 
@@ -499,11 +494,11 @@ impl<'a> Lexer<'a> {
     /// `l`/`L` → `L`.  Anything else leaves the cursor untouched.
     fn parse_float_suffix(&mut self) -> FloatSuffix {
         match self.peek() {
-            Some(b'f') | Some(b'F') => {
+            Some(b'f' | b'F') => {
                 self.pos += 1;
                 FloatSuffix::F
             }
-            Some(b'l') | Some(b'L') => {
+            Some(b'l' | b'L') => {
                 self.pos += 1;
                 FloatSuffix::L
             }

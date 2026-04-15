@@ -1,3 +1,24 @@
+// Pedantic lints we've audited and accept as style preferences for this crate.
+#![allow(
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::module_name_repetitions,
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::unreadable_literal,
+    clippy::doc_markdown,
+    clippy::wildcard_imports,
+    clippy::needless_pass_by_value,
+    clippy::manual_let_else
+)]
+
 //! Diagnostic reporting for the Forge compiler.
 //!
 //! This crate provides the [`Diagnostic`] type and the [`render_diagnostics`]
