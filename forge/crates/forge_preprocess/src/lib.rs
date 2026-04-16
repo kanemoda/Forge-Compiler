@@ -119,3 +119,6 @@ pub use system_includes::detect_system_include_paths;
 // want alongside the preprocessor API.
 pub use forge_diagnostics::{Diagnostic, Severity};
 pub use forge_lexer::{Token, TokenKind};
+
+#[cfg(test)]
+mod tests;

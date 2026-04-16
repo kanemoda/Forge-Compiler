@@ -307,47 +307,6 @@ fn format_string_literal(value: &str, prefix: StringPrefix) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pp_token::PPToken;
-    use forge_lexer::{lex_fragment, Lexer};
-
-    fn wrap(src: &str) -> Vec<PPToken> {
-        lex_fragment(src).into_iter().map(PPToken::new).collect()
-    }
-
-    #[test]
-    fn spelling_of_keywords_and_punctuators_is_canonical() {
-        assert_eq!(spelling_of(&TokenKind::Int), "int");
-        assert_eq!(spelling_of(&TokenKind::Return), "return");
-        assert_eq!(spelling_of(&TokenKind::LeftBrace), "{");
-        assert_eq!(spelling_of(&TokenKind::HashHash), "##");
-        assert_eq!(spelling_of(&TokenKind::Ellipsis), "...");
-    }
-
-    #[test]
-    fn spelling_of_identifier_is_its_name() {
-        assert_eq!(
-            spelling_of(&TokenKind::Identifier("foo_bar".into())),
-            "foo_bar"
-        );
-    }
-
-    #[test]
-    fn spelling_of_integer_literal_reattaches_suffix() {
-        assert_eq!(
-            spelling_of(&TokenKind::IntegerLiteral {
-                value: 42,
-                suffix: IntSuffix::None
-            }),
-            "42"
-        );
-        assert_eq!(
-            spelling_of(&TokenKind::IntegerLiteral {
-                value: 1,
-                suffix: IntSuffix::ULL
-            }),
-            "1ull"
-        );
-    }
 
     #[test]
     fn spelling_of_string_literal_reescapes_specials() {
@@ -369,76 +328,5 @@ mod tests {
         );
         assert_eq!(format_char_literal(b'\'' as u32, CharPrefix::None), "'\\''");
         assert_eq!(format_char_literal(b'A' as u32, CharPrefix::None), "'A'");
-    }
-
-    // ---------- stringify ----------
-
-    #[test]
-    fn stringify_identifier_is_just_its_spelling() {
-        let arg = wrap("hello");
-        assert_eq!(stringify(&arg), "hello");
-    }
-
-    #[test]
-    fn stringify_preserves_internal_spaces_only_where_has_leading_space_is_set() {
-        // "a + b" — the lexer marks `+` and `b` as having leading space.
-        let arg = wrap("a + b");
-        assert_eq!(stringify(&arg), "a + b");
-    }
-
-    #[test]
-    fn stringify_concatenates_adjacent_tokens_without_spaces() {
-        // `a+b` — no spaces between tokens.
-        let arg = wrap("a+b");
-        assert_eq!(stringify(&arg), "a+b");
-    }
-
-    #[test]
-    fn stringify_escapes_inner_quotes_in_string_literal_arg() {
-        // The argument is a single StringLiteral token whose spelling is
-        // `"hello"`.  Stringification must escape both double quotes.
-        let arg = wrap("\"hello\"");
-        assert_eq!(stringify(&arg), "\\\"hello\\\"");
-    }
-
-    #[test]
-    fn stringify_escapes_inner_backslash_in_string_literal_arg() {
-        // Source is `"a\nb"` — the lexer decodes `\n` to a newline, but
-        // stringify re-emits the source form as `\n`, then escapes the
-        // backslash to `\\n`.
-        let arg = wrap("\"a\\nb\"");
-        assert_eq!(stringify(&arg), "\\\"a\\\\nb\\\"");
-    }
-
-    #[test]
-    fn stringify_escapes_backslash_in_char_literal_arg() {
-        // Source is `'\\'` — the char literal value is a single backslash.
-        // Spelling reconstructs `'\\'`; stringify doubles each backslash:
-        // `'\\\\'`.
-        let arg = wrap("'\\\\'");
-        assert_eq!(stringify(&arg), "'\\\\\\\\'");
-    }
-
-    #[test]
-    fn stringify_does_not_escape_single_quote() {
-        let arg = wrap("'a'");
-        assert_eq!(stringify(&arg), "'a'");
-    }
-
-    // ---------- paste_spelling ----------
-
-    #[test]
-    fn paste_spelling_concatenates_both_sides() {
-        let left = Lexer::new("foo").tokenize().into_iter().next().unwrap();
-        let right = Lexer::new("bar").tokenize().into_iter().next().unwrap();
-        assert_eq!(paste_spelling(Some(&left), Some(&right)), "foobar");
-    }
-
-    #[test]
-    fn paste_spelling_handles_empty_left_or_right() {
-        let only = Lexer::new("foo").tokenize().into_iter().next().unwrap();
-        assert_eq!(paste_spelling(Some(&only), None), "foo");
-        assert_eq!(paste_spelling(None, Some(&only)), "foo");
-        assert_eq!(paste_spelling(None, None), "");
     }
 }
