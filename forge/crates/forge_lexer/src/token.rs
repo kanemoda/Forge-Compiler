@@ -282,6 +282,92 @@ pub enum TokenKind {
     Unknown(char),
 }
 
+impl TokenKind {
+    /// If `self` has an identifier-like spelling, return it.
+    ///
+    /// At the preprocessor level C has no reserved words — keywords are
+    /// just identifiers that happen to have special meaning to the
+    /// parser.  `#define`, `#undef`, `defined`, `#ifdef`, macro expansion
+    /// and the "unknown identifier becomes 0" rule in `#if` all need to
+    /// treat every keyword token the same way they treat a user-written
+    /// [`TokenKind::Identifier`].  This method is the single place that
+    /// maps a keyword token back to its source spelling for those uses.
+    ///
+    /// Returns `None` for punctuators, literals, and sentinels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use forge_lexer::TokenKind;
+    ///
+    /// assert_eq!(TokenKind::Int.identifier_spelling(), Some("int"));
+    /// assert_eq!(TokenKind::Noreturn.identifier_spelling(), Some("_Noreturn"));
+    /// assert_eq!(
+    ///     TokenKind::Identifier("foo".into()).identifier_spelling(),
+    ///     Some("foo"),
+    /// );
+    /// assert_eq!(TokenKind::Plus.identifier_spelling(), None);
+    /// ```
+    pub fn identifier_spelling(&self) -> Option<&str> {
+        Some(match self {
+            TokenKind::Identifier(s) => s.as_str(),
+            TokenKind::Auto => "auto",
+            TokenKind::Break => "break",
+            TokenKind::Case => "case",
+            TokenKind::Char => "char",
+            TokenKind::Const => "const",
+            TokenKind::Continue => "continue",
+            TokenKind::Default => "default",
+            TokenKind::Do => "do",
+            TokenKind::Double => "double",
+            TokenKind::Else => "else",
+            TokenKind::Enum => "enum",
+            TokenKind::Extern => "extern",
+            TokenKind::Float => "float",
+            TokenKind::For => "for",
+            TokenKind::Goto => "goto",
+            TokenKind::If => "if",
+            TokenKind::Inline => "inline",
+            TokenKind::Int => "int",
+            TokenKind::Long => "long",
+            TokenKind::Register => "register",
+            TokenKind::Restrict => "restrict",
+            TokenKind::Return => "return",
+            TokenKind::Short => "short",
+            TokenKind::Signed => "signed",
+            TokenKind::Sizeof => "sizeof",
+            TokenKind::Static => "static",
+            TokenKind::Struct => "struct",
+            TokenKind::Switch => "switch",
+            TokenKind::Typedef => "typedef",
+            TokenKind::Union => "union",
+            TokenKind::Unsigned => "unsigned",
+            TokenKind::Void => "void",
+            TokenKind::Volatile => "volatile",
+            TokenKind::While => "while",
+            TokenKind::Alignas => "_Alignas",
+            TokenKind::Alignof => "_Alignof",
+            TokenKind::Atomic => "_Atomic",
+            TokenKind::Bool => "_Bool",
+            TokenKind::Complex => "_Complex",
+            TokenKind::Generic => "_Generic",
+            TokenKind::Imaginary => "_Imaginary",
+            TokenKind::Noreturn => "_Noreturn",
+            TokenKind::StaticAssert => "_Static_assert",
+            TokenKind::ThreadLocal => "_Thread_local",
+            _ => return None,
+        })
+    }
+
+    /// `true` iff this token has an identifier-like spelling (either a
+    /// user [`TokenKind::Identifier`] or any C keyword).
+    ///
+    /// Shorthand for `self.identifier_spelling().is_some()`.
+    pub fn is_identifier_like(&self) -> bool {
+        self.identifier_spelling().is_some()
+    }
+}
+
 /// Integer-literal suffix.
 ///
 /// `unsigned long int` and `long unsigned int` both map to [`IntSuffix::UL`];

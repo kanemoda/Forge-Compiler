@@ -6,4 +6,5 @@ edition.workspace = true
 [dependencies]
 forge_diagnostics.workspace = true
 forge_lexer.workspace = true
+forge_parser.workspace = true
 forge_preprocess.workspace = true

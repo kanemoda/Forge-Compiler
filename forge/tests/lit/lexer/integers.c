@@ -4,6 +4,13 @@
 // suffixes.  The literal's parsed value and canonical suffix show up in
 // the Debug-formatted IntegerLiteral variant printed by `forge check`.
 //
+// Bare literals are not a valid C translation unit; `forge check`
+// runs the parser after the lexer, so parser errors are expected.
+// The `// ERROR:` directive lets the lit runner accept the non-zero
+// exit while the CHECK directives above still validate the lexer's
+// token output on stdout.
+// ERROR: expected
+//
 // Decimal zero and a small decimal integer.
 // CHECK: IntegerLiteral { value: 0, suffix: None }
 // CHECK: IntegerLiteral { value: 42, suffix: None }

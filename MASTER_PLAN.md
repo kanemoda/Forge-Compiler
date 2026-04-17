@@ -6,7 +6,7 @@
 
 ## Vision
 
-Forge is an industrial-strength C17 compiler built from scratch in Rust. It targets x86-64 and AArch64, and is designed to compile real-world C codebases (SQLite, Redis, curl, etc.) with correctness guarantees and optimization strategies that no existing compiler offers together.
+Forge is an industrial-strength C17 compiler built from scratch in Rust. It targets x86-64, and is designed to compile real-world C codebases (SQLite, Redis, curl, etc.) with correctness guarantees and optimization strategies that no existing compiler offers together.
 
 **Four differentiators, in priority order:**
 
@@ -25,7 +25,7 @@ Forge is an industrial-strength C17 compiler built from scratch in Rust. It targ
 | Secondary machine | MacBook Air M4 (early development) |
 | Language | Rust (stable toolchain) |
 | Build system | Cargo workspaces |
-| CI | GitHub Actions (Linux x86-64 + AArch64 cross) |
+| CI | GitHub Actions (Linux x86-64) |
 | Testing | `cargo test` + custom lit-style test runner |
 | AI workflow | Claude Code (Opus 4.6 max effort) writes all code; Opus 4.6 extended reviews progress |
 
@@ -70,17 +70,16 @@ Forge is an industrial-strength C17 compiler built from scratch in Rust. It targ
 │              │ (SMT / Z3)      │                    │
 │              └────────┬─────────┘                    │
 │                       ▼                              │
-│          ┌────────────┴────────────┐                │
-│          ▼                         ▼                │
-│  ┌───────────────┐       ┌───────────────┐         │
-│  │  x86-64       │       │  AArch64      │         │
-│  │  Backend      │       │  Backend      │         │
-│  └───────┬───────┘       └───────┬───────┘         │
-│          ▼                       ▼                  │
-│     ┌─────────┐            ┌─────────┐             │
-│     │  ELF    │            │  ELF    │             │
-│     │ Linker  │            │ Linker  │             │
-│     └─────────┘            └─────────┘             │
+│                       ▼                              │
+│              ┌───────────────┐                       │
+│              │  x86-64       │                       │
+│              │  Backend      │                       │
+│              └───────┬───────┘                       │
+│                      ▼                               │
+│                 ┌─────────┐                          │
+│                 │  ELF    │                          │
+│                 │ Linker  │                          │
+│                 └─────────┘                          │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -107,7 +106,6 @@ forge/
 │   ├── forge_egraph/        Phase 6  — e-graph optimizer
 │   ├── forge_codegen/       Phase 7  — shared codegen infrastructure
 │   ├── forge_x86_64/        Phase 7  — x86-64 machine code
-│   ├── forge_aarch64/       Phase 7  — AArch64 machine code
 │   ├── forge_verify/        Phase 8  — Alive2-style SMT verification
 │   ├── forge_incr/          Phase 9  — incremental compilation
 │   └── forge_energy/        Phase 10 — energy-aware scheduling
@@ -170,10 +168,10 @@ Each phase has a dedicated planning document in `phases/`. Each document contain
 **Duration estimate:** 14–25 days
 **Goal:** Integration with the `egg` crate. Forge IR → e-graph → optimized IR extraction. Rewrite rules for: algebraic simplification, constant folding/propagation, strength reduction, dead code elimination, common subexpression elimination, inlining heuristics. Cost function for extraction. This is the core technical differentiator.
 
-### Phase 7 — Code Generation (x86-64 + AArch64)
+### Phase 7 — Code Generation (x86-64)
 **File:** `phases/phase_07_codegen.md`
 **Duration estimate:** 18–30 days
-**Goal:** Forge IR → machine instructions → ELF object files. Register allocation (linear scan or graph coloring), instruction selection (tree-pattern matching), stack frame layout, calling conventions (System V ABI), basic instruction scheduling. External linker invocation (system `ld` or `lld`). Both targets.
+**Goal:** Forge IR → machine instructions → ELF object files. Register allocation (linear scan or graph coloring), instruction selection (tree-pattern matching), stack frame layout, calling conventions (System V ABI), basic instruction scheduling. External linker invocation (system `ld` or `lld`). x86-64 target.
 
 ### Phase 8 — Verified Passes (Alive2-Style)
 **File:** `phases/phase_08_verify.md`
@@ -275,7 +273,7 @@ Phase 0 ──▶ Phase 1 ──▶ Phase 2 ──▶ Phase 3 ──▶ Phase 4
 | `phases/phase_04_sema.md` | Semantic analysis & type system |
 | `phases/phase_05_ir.md` | Forge IR design & AST lowering |
 | `phases/phase_06_egraph.md` | E-graph optimizer (egg) |
-| `phases/phase_07_codegen.md` | x86-64 + AArch64 backends |
+| `phases/phase_07_codegen.md` | x86-64 backend |
 | `phases/phase_08_verify.md` | Alive2-style verified passes |
 | `phases/phase_09_incremental.md` | Incremental compilation |
 | `phases/phase_10_energy.md` | Energy-aware code generation |

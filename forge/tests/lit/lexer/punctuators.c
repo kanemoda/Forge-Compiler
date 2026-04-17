@@ -6,6 +6,14 @@
 // prefix collisions (`Plus` is a substring of `PlusPlus`/`PlusEqual`).
 // The quoted form is unique per punctuator and sidesteps the problem.
 //
+// The bare punctuator sequence below is not a syntactically valid C
+// translation unit — `forge check` now runs the parser after the
+// lexer, so parser errors are expected.  Declaring `// ERROR:`
+// directives lets the lit runner accept the non-zero exit while the
+// CHECK directives above still validate the lexer's token output on
+// stdout, which is what this file actually tests.
+// ERROR: expected
+//
 // Brackets and groupings.
 // CHECK: '('
 // CHECK: ')'

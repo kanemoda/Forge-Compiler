@@ -1,44 +1,60 @@
-# Phase 3 — Parser & AST (Revised)
+# Phase 3 — Parser & AST (Final)
 
-**Depends on:** Phase 2 (Preprocessor) ✅ COMPLETE
+**Depends on:** Phase 2 (Preprocessor) ✅ COMPLETE (536 tests, 38ms stdio.h)
 **Unlocks:** Phase 4 (Semantic Analysis)
-**Estimated duration:** 14–22 days
+**Estimated duration:** 14–22 days (7 prompts)
 
 ---
 
 ## Goal
 
-Build a hand-written recursive descent parser that consumes preprocessed tokens and produces a complete C17 AST. The parser must handle the full C17 grammar including all declaration forms, statement types, and expression syntax. It must also tolerate GNU extensions present in system header output — after `#include <stdio.h>`, the preprocessed token stream contains `__attribute__`, `__extension__`, `__restrict`, etc. that the parser must not choke on.
+Build a hand-written recursive descent parser that consumes preprocessed tokens and produces a complete C17 AST. The parser must:
 
-Error recovery is critical — the parser should not bail on the first error.
+1. Handle the full C17 grammar — all declarations, statements, and expressions
+2. Tolerate GNU extensions in system header output (`__attribute__`, `__extension__`, etc.)
+3. Recover from errors — a syntax error in one function must not prevent parsing the rest
+4. Track typedef names — the single most important correctness requirement
+
+After this phase, `forge check file.c` runs the full pipeline: lex → preprocess → parse, and reports all diagnostics. `forge parse file.c` dumps the AST tree.
 
 ---
 
 ## Key Design Decisions
 
-### 1. Type specifier collection: list-based, not single-enum
-C allows multiple type specifiers that combine: `unsigned long long int` is four separate specifier tokens. The parser collects these as a `Vec<TypeSpecifierToken>` and either resolves them during parsing or defers to sema. A single `TypeSpecifier` enum cannot represent mid-parse state.
+### 1. Type specifiers: collected as a Vec, resolved by sema (Phase 4)
 
-### 2. No arena allocator yet — start with Box
-Arena allocators (`bumpalo`, `typed-arena`) optimize allocation but add API complexity. Start with `Box<>` for recursive AST nodes. Profile in Phase 11; migrate to arena if allocation is a bottleneck. This avoids lifetime headaches while the AST design is still stabilizing.
+C allows multiple type specifier keywords that combine: `unsigned long long int` is four separate tokens. The order doesn't matter (`long unsigned int long` is the same type). The parser collects all specifier tokens into a `Vec<TypeSpecifierToken>`. Phase 4 resolves the combination into a concrete type and rejects invalid combinations like `float double`.
 
-### 3. GNU extension tolerance
-System headers preprocessed by Forge produce tokens like `__attribute__((...))`, `__extension__`, `__asm__(...)`, `__restrict`, `__inline`, `__typeof__`, `__builtin_va_list`. The parser must handle these — at minimum by skipping `__attribute__((...))` balanced-paren groups and treating the rest as regular identifiers or qualifier keywords. This is NOT optional — without it, parsing any file that includes a system header fails.
+**Rationale:** Trying to resolve during parsing leads to complex state machines and bad error messages. Deferring to sema keeps the parser simple and gives better diagnostics ("conflicting type specifiers: 'float' and 'double'" vs "unexpected token 'double'").
+
+### 2. Start with `Box<>`, not arena allocation
+
+Arena allocators (`bumpalo`, `typed-arena`) reduce allocation overhead but add lifetime complexity. Since the AST design will evolve through Phase 4–5 as we discover needs, start with `Box<>` for all recursive AST nodes. Profile in Phase 11 and migrate to arena only if allocation shows up as a bottleneck.
+
+### 3. GNU extension tolerance is NOT optional
+
+After `#include <stdio.h>`, the preprocessed token stream contains `__attribute__((...))`, `__extension__`, `__restrict`, `__inline__`, `__asm__(...)`, `__typeof__`, `__builtin_va_list`, and more. The parser must handle every one of these — at minimum by skipping balanced parens for attribute/asm, and by treating keyword variants as their standard equivalents. Without this, `forge check` on any real C file fails.
 
 ### 4. Typedef tracking is the #1 correctness issue
-`T * x;` is a pointer declaration if T is a typedef, or a multiplication expression if T is a variable. The parser must maintain a live set of typedef names, updated as declarations are parsed. Scoping matters — typedef names in inner blocks shadow outer ones and disappear when the block ends.
+
+`T * x;` — is this a pointer declaration or a multiplication expression? The parser can only decide by knowing whether `T` was previously declared as a typedef. A wrong answer here means **silent misparsing** of every line that uses a typedef type. The parser must:
+- Maintain a scoped set of typedef names (stack of `HashSet<String>`)
+- Update it as `typedef` declarations are parsed
+- Consult it when deciding declaration vs expression
+- Handle scoping: inner block typedefs shadow outer ones and disappear at `}`
 
 ---
 
 ## Deliverables
 
 1. **`forge_parser` crate** — recursive descent parser producing an AST
-2. **Complete C17 AST types** — all declarations, statements, expressions
-3. **Pratt parser** for expressions with correct C17 precedence
-4. **Declaration parser** — including the full recursive declarator syntax
-5. **GNU extension tolerance** — skip/handle common GCC/Clang extensions in system headers
-6. **Error recovery** — synchronize on `;`, `}`, and declaration starts
-7. **Comprehensive tests** — unit tests, lit tests, real-C parse tests
+2. **Complete C17 AST types** — every declaration, statement, expression, and GNU extension node
+3. **Pratt parser** for expressions with all 15 C17 precedence levels
+4. **Declaration parser** — full recursive declarator syntax including spiral-rule complexity
+5. **GNU extension tolerance** — `__attribute__`, `__typeof__`, `__asm__`, `__extension__`, keyword aliases
+6. **Error recovery** — synchronize on `;`, `}`, and declaration starts; collect all errors
+7. **AST pretty-printer** — tree-format dump for debugging and testing
+8. **Comprehensive tests** — unit, lit, stress, system header parse, real-C program
 
 ---
 
@@ -54,60 +70,70 @@ TranslationUnit
 │
 ├── DeclSpecifiers
 │   ├── storage_class: Option<StorageClass>
-│   ├── type_specifiers: Vec<TypeSpecifierToken>  ← LIST, not single
+│   ├── type_specifiers: Vec<TypeSpecifierToken>  ← LIST, not single enum
 │   ├── type_qualifiers: Vec<TypeQualifier>
 │   ├── function_specifiers: Vec<FunctionSpecifier>
-│   └── alignment: Option<AlignSpec>
+│   ├── alignment: Option<AlignSpec>
+│   └── attributes: Vec<GnuAttribute>            ← GNU extension
 │
-├── Declarator
-│   ├── pointer: Vec<PointerQualifiers>
-│   └── direct: DirectDeclarator (Ident | Paren | Array | Function)
+├── Declarator  { pointers, direct }
+│   └── DirectDeclarator: Ident | Paren | Array | Function
 │
-├── Stmt (Compound | If | While | For | Switch | Return | Goto | Label | Expr | ...)
+├── Stmt: Compound | If | While | For | Switch | Return | Goto | Label | Expr | ...
 │
 └── Expr (all via Pratt parser)
-    ├── Literal, Ident, BinaryOp, UnaryOp, PostfixOp
+    ├── Literals, Ident
+    ├── BinaryOp, UnaryOp, PostfixOp
     ├── FunctionCall, ArraySubscript, MemberAccess
     ├── Cast, CompoundLiteral, Conditional, Assignment
     ├── Sizeof, Alignof, GenericSelection
     └── Comma
 ```
 
-### The Three-Way Ambiguity: `(type)` patterns
+### The Four Parser Ambiguities
 
-When the parser sees `(`, three things are possible:
-1. **Parenthesized expression:** `(a + b)`
-2. **Cast expression:** `(int)x`
-3. **Compound literal:** `(int[]){1, 2, 3}`
+These are the hard problems. Every one requires the typedef table.
 
-Resolution algorithm:
-- After `(`, try to parse as a type-name (using the typedef table)
-- If type-name parse succeeds and `)` follows:
-  - If the next token after `)` is `{` → **compound literal**
-  - Else → **cast expression**
-- If type-name parse fails → **parenthesized expression**
+**Ambiguity 1 — Declaration vs Expression statement:**
+At block scope, `T * x;` is a pointer declaration if T is a typedef, multiplication if not. Resolved by checking `is_typedef(T)` before parsing.
 
-This requires speculative parsing (try type-name, backtrack if it fails) OR a lookahead heuristic (if token after `(` is a type keyword or typedef name, it's a type context).
+**Ambiguity 2 — Cast vs Parenthesized expression vs Compound literal:**
+When we see `(`:
+- `(a + b)` → parenthesized expression
+- `(int)x` → cast
+- `(int[]){1, 2}` → compound literal
+
+Resolution: After `(`, check if the next token starts a type-name (type keyword, qualifier, or typedef name). If yes, tentatively parse type-name → `)`. If next is `{` → compound literal. Otherwise → cast. If not a type-name → parenthesized expression.
+
+**Ambiguity 3 — `sizeof(X)` — expression or type?**
+`sizeof(T)` where T is a typedef → sizeof-type. `sizeof(x)` where x is a variable → sizeof-expression with parentheses. Resolved by checking is_typedef after `sizeof(`.
+
+**Ambiguity 4 — Label vs Expression:**
+`foo:` at statement level could be a label (if followed by a statement) or the start of a ternary expression like `foo : bar` (but this only appears mid-expression). Resolution: at statement level, if identifier is followed by `:` and we're not inside an expression, it's a label. Check `peek()` == identifier && `peek_ahead(1)` == `:` before falling through to expression-statement.
 
 ### Expression Precedence (Pratt binding powers)
 
-| Level | Operators | Assoc |
-|-------|-----------|-------|
-| 15 | `,` (comma) | Left |
-| 14 | `= += -= *= /= %= <<= >>= &= ^= \|=` | Right |
-| 13 | `? :` (ternary) | Right |
-| 12 | `\|\|` | Left |
-| 11 | `&&` | Left |
-| 10 | `\|` | Left |
-| 9 | `^` | Left |
-| 8 | `&` | Left |
-| 7 | `== !=` | Left |
-| 6 | `< > <= >=` | Left |
-| 5 | `<< >>` | Left |
-| 4 | `+ -` | Left |
-| 3 | `* / %` | Left |
-| 2 | Unary prefix: `++ -- & * + - ~ ! sizeof _Alignof (cast)` | Right |
-| 1 | Postfix: `() [] . -> ++ --` | Left |
+```
+Level  Operators                              Assoc    BP (left, right)
+─────  ──────────────────────────────────────  ─────    ────────────────
+15     , (comma)                               Left     (2, 3)
+14     = += -= *= /= %= <<= >>= &= ^= |=     Right    (4, 3)
+13     ? : (ternary)                           Right    (6, 5)
+12     ||                                      Left     (8, 9)
+11     &&                                      Left     (10, 11)
+10     |                                       Left     (12, 13)
+ 9     ^                                       Left     (14, 15)
+ 8     &                                       Left     (16, 17)
+ 7     == !=                                   Left     (18, 19)
+ 6     < > <= >=                               Left     (20, 21)
+ 5     << >>                                   Left     (22, 23)
+ 4     + -                                     Left     (24, 25)
+ 3     * / %                                   Left     (26, 27)
+ 2     prefix: ++ -- & * + - ~ ! sizeof cast   Right    (_, 29)
+ 1     postfix: () [] . -> ++ --               Left     (31, _)
+```
+
+Note: `&` and `*` are both unary (prefix, bp 29) and binary (infix, bp 16/26). The Pratt parser handles this naturally — if we're in prefix position it's unary, if infix position it's binary.
 
 ---
 
@@ -115,27 +141,28 @@ This requires speculative parsing (try type-name, backtrack if it fails) OR a lo
 
 ### Core
 - [ ] Parse `int main() { return 0; }`
-- [ ] Parse all statement types (if/else, while, do-while, for, switch/case, goto/label, return, break, continue, compound)
-- [ ] Parse all declaration forms (variables, functions, typedefs, struct, union, enum)
+- [ ] Parse all statement types (if/else, while, do-while, for, switch/case/default, goto/label, return, break, continue, compound, empty)
+- [ ] Parse all declaration forms (variables, functions, typedefs, struct, union, enum, _Static_assert, _Alignas)
 - [ ] Parse complex declarators: `int (*(*fp)(int))[10]`
 - [ ] Parse all expression operators with correct precedence
 - [ ] Parse initializer lists with designators: `{ .x = 1, [0] = 2 }`
 - [ ] Parse `_Generic`, `_Static_assert`, compound literals
-- [ ] Typedef names resolve the declaration/expression ambiguity
+- [ ] Typedef names correctly resolve all four ambiguities
 
 ### GNU Extension Tolerance
-- [ ] `__attribute__((...))` is skipped (balanced paren consumption)
-- [ ] `__extension__` is ignored (treated as no-op)
-- [ ] `__restrict`, `__inline`, `__volatile__`, `__const` are treated as their standard equivalents
-- [ ] `__asm__(...)` at declaration level is skipped (balanced parens)
-- [ ] `__builtin_va_list` passes through as a type identifier
-- [ ] `__typeof__(expr)` is parsed (GNU typeof)
-- [ ] `__attribute__` on function declarations, parameters, struct members — all skipped cleanly
+- [ ] `__attribute__((...))` skipped in all positions (specifiers, declarators, params, struct members, enumerators)
+- [ ] `__extension__` consumed as no-op
+- [ ] `__restrict`, `__inline__`, `__volatile__`, `__const`, `__signed__` → standard equivalents
+- [ ] `__asm__(...)` skipped (balanced parens)
+- [ ] `__builtin_va_list` treated as built-in typedef
+- [ ] `__typeof__(expr/type)` parsed
+- [ ] Preprocessed `#include <stdio.h>` output parses without errors
 
-### Error Recovery & Real-World
+### Error Recovery
 - [ ] Syntax error in one function doesn't prevent parsing subsequent functions
-- [ ] Can parse preprocessed `#include <stdio.h>` output without errors (token stream from Phase 2)
-- [ ] Can parse a 50-line C program using most language features
+- [ ] Multiple errors collected and reported
+- [ ] Missing semicolon → recovers at next statement
+- [ ] No panics on any input (including empty file, garbage tokens)
 
 ---
 
@@ -147,102 +174,109 @@ This requires speculative parsing (try type-name, backtrack if it fails) OR a lo
 Create the forge_parser crate in the Forge workspace. Define the complete C17 AST
 type hierarchy. DO NOT write the parser yet — just the types.
 
-IMPORTANT DESIGN DECISION: Type specifiers are collected as a LIST, not a single enum.
-In C, `unsigned long long int` is four separate type specifier tokens that combine.
-The parser collects them into a Vec during parsing. Resolution to a concrete type
-happens in Phase 4 (sema).
+IMPORTANT DESIGN DECISIONS:
+- Type specifiers are a Vec<TypeSpecifierToken>, NOT a single enum.
+  `unsigned long long int` = four entries in the Vec.
+  Resolution to concrete type happens in Phase 4 (sema).
+- Use Box<> for recursive nodes. No arena allocator yet.
+- Every AST node with a source location has a `span: Span` field.
+- StructDef is ONE type used for both struct and union (kind field distinguishes).
 
 Create these files:
 
 forge_parser/src/lib.rs — crate root, pub mod declarations
 forge_parser/src/ast.rs — all AST node types
-forge_parser/src/ast_ops.rs — operator enums (BinaryOp, UnaryOp, AssignOp)
+forge_parser/src/ast_ops.rs — operator enums
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AST TYPES (define in ast.rs)
+AST TYPES — ast.rs
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-TranslationUnit {
-    declarations: Vec<ExternalDeclaration>,
-    span: Span,
+use forge_lexer::{Span, IntSuffix, FloatSuffix, CharPrefix, StringPrefix};
+use crate::ast_ops::*;
+
+/// Root of the AST
+pub struct TranslationUnit {
+    pub declarations: Vec<ExternalDeclaration>,
+    pub span: Span,
 }
 
-ExternalDeclaration — enum:
-    FunctionDef(FunctionDef)
-    Declaration(Declaration)
+pub enum ExternalDeclaration {
+    FunctionDef(FunctionDef),
+    Declaration(Declaration),
+}
 
-FunctionDef {
-    specifiers: DeclSpecifiers,
-    declarator: Declarator,
-    // K&R-style old declarations between ) and { are NOT supported (deprecated)
-    body: CompoundStmt,
-    span: Span,
+pub struct FunctionDef {
+    pub specifiers: DeclSpecifiers,
+    pub declarator: Declarator,
+    pub body: CompoundStmt,
+    pub span: Span,
 }
 
 ━━━ Declarations ━━━
 
-Declaration {
-    specifiers: DeclSpecifiers,
-    init_declarators: Vec<InitDeclarator>,
-    span: Span,
+pub struct Declaration {
+    pub specifiers: DeclSpecifiers,
+    pub init_declarators: Vec<InitDeclarator>,
+    pub span: Span,
 }
 
-DeclSpecifiers {
-    storage_class: Option<StorageClass>,
-    type_specifiers: Vec<TypeSpecifierToken>,  // ← CRITICAL: this is a Vec
-    type_qualifiers: Vec<TypeQualifier>,
-    function_specifiers: Vec<FunctionSpecifier>,
-    alignment: Option<AlignSpec>,
-    // GNU: attributes collected here too
-    attributes: Vec<GnuAttribute>,
-    span: Span,
+pub struct DeclSpecifiers {
+    pub storage_class: Option<StorageClass>,
+    pub type_specifiers: Vec<TypeSpecifierToken>,  // ← CRITICAL: Vec, not single
+    pub type_qualifiers: Vec<TypeQualifier>,
+    pub function_specifiers: Vec<FunctionSpecifier>,
+    pub alignment: Option<AlignSpec>,
+    pub attributes: Vec<GnuAttribute>,
+    pub span: Span,
 }
 
-StorageClass — enum: Auto, Register, Static, Extern, Typedef, ThreadLocal
+pub enum StorageClass { Auto, Register, Static, Extern, Typedef, ThreadLocal }
 
-TypeSpecifierToken — enum:
-    // Primitive keywords (collected into Vec, resolved by sema)
+pub enum TypeSpecifierToken {
+    // Primitive keywords — collected into Vec, sema resolves the combination
     Void, Char, Short, Int, Long, Float, Double,
     Signed, Unsigned, Bool, Complex,
-    // Compound types (parsed inline)
-    Struct(StructDef),
-    Union(UnionDef),
+    // Compound types
+    Struct(StructDef),   // struct AND union use StructDef (kind field distinguishes)
+    Union(StructDef),    // ← same type as Struct variant, kind = StructOrUnion::Union
     Enum(EnumDef),
     // Typedef reference
     TypedefName(String),
     // C11
     Atomic(Box<TypeName>),
-    // GNU extension
+    // GNU extensions
     TypeofExpr(Box<Expr>),
     TypeofType(Box<TypeName>),
+}
 
-TypeQualifier — enum: Const, Volatile, Restrict, Atomic
-
-FunctionSpecifier — enum: Inline, Noreturn
-
-AlignSpec — enum:
+pub enum TypeQualifier { Const, Volatile, Restrict, Atomic }
+pub enum FunctionSpecifier { Inline, Noreturn }
+pub enum AlignSpec {
     AlignAsType(TypeName),
     AlignAsExpr(Box<Expr>),
+}
 
 ━━━ Declarators ━━━
 
-InitDeclarator {
-    declarator: Declarator,
-    initializer: Option<Initializer>,
-    span: Span,
+pub struct InitDeclarator {
+    pub declarator: Declarator,
+    pub initializer: Option<Initializer>,
+    pub span: Span,
 }
 
-Declarator {
-    pointers: Vec<PointerQualifiers>,  // each level: * with optional qualifiers
-    direct: DirectDeclarator,
-    span: Span,
+pub struct Declarator {
+    pub pointers: Vec<PointerQualifiers>,
+    pub direct: DirectDeclarator,
+    pub span: Span,
 }
 
-PointerQualifiers {
-    qualifiers: Vec<TypeQualifier>,
+pub struct PointerQualifiers {
+    pub qualifiers: Vec<TypeQualifier>,
+    pub attributes: Vec<GnuAttribute>,  // __attribute__ can follow * in pointers
 }
 
-DirectDeclarator — enum:
+pub enum DirectDeclarator {
     Identifier(String, Span),
     Parenthesized(Box<Declarator>),
     Array {
@@ -258,94 +292,119 @@ DirectDeclarator — enum:
         is_variadic: bool,
         span: Span,
     },
+}
 
-ArraySize — enum:
+pub enum ArraySize {
     Unspecified,           // int arr[]
-    Expr(Box<Expr>),       // int arr[10]
-    VLA,                   // int arr[*] (VLA in prototype)
+    Expr(Box<Expr>),       // int arr[10] or int arr[n] (VLA)
+    VLAStar,               // int arr[*] (VLA in function prototype only)
+}
 
-ParamDecl {
-    specifiers: DeclSpecifiers,
-    declarator: Option<Declarator>,  // None for abstract params like foo(int, int)
-    span: Span,
+pub struct ParamDecl {
+    pub specifiers: DeclSpecifiers,
+    pub declarator: Option<Declarator>,  // None for abstract: foo(int, int)
+    pub span: Span,
 }
 
 ━━━ Struct / Union / Enum ━━━
 
-StructDef {
-    kind: StructOrUnion,  // enum: Struct, Union
-    name: Option<String>,
-    members: Option<Vec<StructMember>>,  // None = forward declaration
-    attributes: Vec<GnuAttribute>,
-    span: Span,
-}
-// UnionDef is the same type as StructDef with kind = Union
+pub enum StructOrUnion { Struct, Union }
 
-StructOrUnion — enum: Struct, Union
-
-StructMember {
-    specifiers: DeclSpecifiers,
-    declarators: Vec<StructDeclarator>,
-    span: Span,
+pub struct StructDef {
+    pub kind: StructOrUnion,
+    pub name: Option<String>,
+    pub members: Option<Vec<StructMember>>,  // None = forward declaration (struct foo;)
+    pub attributes: Vec<GnuAttribute>,
+    pub span: Span,
 }
 
-StructDeclarator {
-    declarator: Option<Declarator>,  // None for anonymous bit-field
-    bit_width: Option<Box<Expr>>,
-    span: Span,
+pub enum StructMember {
+    Field(StructField),
+    StaticAssert(StaticAssert),  // C11: _Static_assert inside struct body
 }
 
-EnumDef {
-    name: Option<String>,
-    enumerators: Option<Vec<Enumerator>>,  // None = forward reference
-    attributes: Vec<GnuAttribute>,
-    span: Span,
+pub struct StructField {
+    pub specifiers: DeclSpecifiers,
+    pub declarators: Vec<StructFieldDeclarator>,
+    pub span: Span,
 }
 
-Enumerator {
-    name: String,
-    value: Option<Box<Expr>>,
-    span: Span,
+pub struct StructFieldDeclarator {
+    pub declarator: Option<Declarator>,  // None for anonymous bit-field: `int : 5;`
+    pub bit_width: Option<Box<Expr>>,
+    pub span: Span,
+}
+
+pub struct EnumDef {
+    pub name: Option<String>,
+    pub enumerators: Option<Vec<Enumerator>>,  // None = forward reference
+    pub attributes: Vec<GnuAttribute>,
+    pub span: Span,
+}
+
+pub struct Enumerator {
+    pub name: String,
+    pub value: Option<Box<Expr>>,
+    pub attributes: Vec<GnuAttribute>,  // GCC allows __attribute__ on enumerators
+    pub span: Span,
 }
 
 ━━━ Initializers ━━━
 
-Initializer — enum:
+pub enum Initializer {
     Expr(Box<Expr>),
-    List { items: Vec<DesignatedInit>, span: Span },
-
-DesignatedInit {
-    designators: Vec<Designator>,
-    initializer: Box<Initializer>,
-    span: Span,
+    List {
+        items: Vec<DesignatedInit>,
+        span: Span,
+    },
 }
 
-Designator — enum:
+pub struct DesignatedInit {
+    pub designators: Vec<Designator>,  // empty = no designation
+    pub initializer: Box<Initializer>,
+    pub span: Span,
+}
+
+pub enum Designator {
     Index(Box<Expr>),     // [expr]
-    Field(String),         // .field
+    Field(String),         // .identifier
+}
 
 ━━━ Statements ━━━
 
-CompoundStmt {
-    items: Vec<BlockItem>,
-    span: Span,
+pub struct CompoundStmt {
+    pub items: Vec<BlockItem>,
+    pub span: Span,
 }
 
-BlockItem — enum:
+pub enum BlockItem {
     Declaration(Declaration),
     Statement(Stmt),
+    StaticAssert(StaticAssert),  // C11: _Static_assert at block scope
+}
 
-Stmt — enum:
+pub enum Stmt {
     Compound(CompoundStmt),
-    Expr(Option<Box<Expr>>),       // expression-stmt or empty-stmt (;)
+    Expr {
+        expr: Option<Box<Expr>>,  // None = empty statement (;)
+        span: Span,
+    },
     If {
         condition: Box<Expr>,
         then_branch: Box<Stmt>,
         else_branch: Option<Box<Stmt>>,
         span: Span,
     },
-    While { condition: Box<Expr>, body: Box<Stmt>, span: Span },
-    DoWhile { body: Box<Stmt>, condition: Box<Expr>, span: Span },
+    While {
+        condition: Box<Expr>,
+        body: Box<Stmt>,
+        span: Span,
+    },
+    DoWhile {
+        body: Box<Stmt>,
+        condition: Box<Expr>,
+        span: Span,
+    },
     For {
         init: Option<ForInit>,
         condition: Option<Box<Expr>>,
@@ -353,28 +412,51 @@ Stmt — enum:
         body: Box<Stmt>,
         span: Span,
     },
-    Switch { expr: Box<Expr>, body: Box<Stmt>, span: Span },
-    Case { value: Box<Expr>, body: Box<Stmt>, span: Span },
-    Default { body: Box<Stmt>, span: Span },
-    Return { value: Option<Box<Expr>>, span: Span },
-    Break { span: Span },
-    Continue { span: Span },
-    Goto { label: String, span: Span },
-    Label { name: String, stmt: Box<Stmt>, span: Span },
-    // C11
-    StaticAssert {
-        condition: Box<Expr>,
-        message: Option<String>,  // C23 makes message optional, include for forward compat
+    Switch {
+        expr: Box<Expr>,
+        body: Box<Stmt>,
         span: Span,
     },
+    Case {
+        value: Box<Expr>,
+        body: Box<Stmt>,
+        span: Span,
+    },
+    Default {
+        body: Box<Stmt>,
+        span: Span,
+    },
+    Return {
+        value: Option<Box<Expr>>,
+        span: Span,
+    },
+    Break { span: Span },
+    Continue { span: Span },
+    Goto {
+        label: String,
+        span: Span,
+    },
+    Label {
+        name: String,
+        stmt: Box<Stmt>,
+        span: Span,
+    },
+}
 
-ForInit — enum:
+pub enum ForInit {
     Declaration(Declaration),
     Expr(Box<Expr>),
+}
+
+pub struct StaticAssert {
+    pub condition: Box<Expr>,
+    pub message: Option<String>,  // C23 makes message optional
+    pub span: Span,
+}
 
 ━━━ Expressions ━━━
 
-Expr — enum:
+pub enum Expr {
     // Literals
     IntLiteral { value: u64, suffix: Option<IntSuffix>, span: Span },
     FloatLiteral { value: f64, suffix: Option<FloatSuffix>, span: Span },
@@ -382,15 +464,17 @@ Expr — enum:
     StringLiteral { value: String, prefix: Option<StringPrefix>, span: Span },
     // Names
     Ident { name: String, span: Span },
-    // Operators
+    // Binary
     BinaryOp { op: BinaryOp, left: Box<Expr>, right: Box<Expr>, span: Span },
+    // Unary prefix
     UnaryOp { op: UnaryOp, operand: Box<Expr>, span: Span },
+    // Unary postfix
     PostfixOp { op: PostfixOp, operand: Box<Expr>, span: Span },
     // Ternary
     Conditional { condition: Box<Expr>, then_expr: Box<Expr>, else_expr: Box<Expr>, span: Span },
     // Assignment
     Assignment { op: AssignOp, target: Box<Expr>, value: Box<Expr>, span: Span },
-    // Access
+    // Postfix access
     FunctionCall { callee: Box<Expr>, args: Vec<Expr>, span: Span },
     MemberAccess { object: Box<Expr>, member: String, is_arrow: bool, span: Span },
     ArraySubscript { array: Box<Expr>, index: Box<Expr>, span: Span },
@@ -399,7 +483,7 @@ Expr — enum:
     SizeofExpr { expr: Box<Expr>, span: Span },
     SizeofType { type_name: Box<TypeName>, span: Span },
     AlignofType { type_name: Box<TypeName>, span: Span },
-    CompoundLiteral { type_name: Box<TypeName>, initializer: Vec<DesignatedInit>, span: Span },
+    CompoundLiteral { type_name: Box<TypeName>, initializer: Initializer, span: Span },
     // C11
     GenericSelection {
         controlling: Box<Expr>,
@@ -408,121 +492,163 @@ Expr — enum:
     },
     // Comma
     Comma { exprs: Vec<Expr>, span: Span },
-
-GenericAssociation {
-    type_name: Option<TypeName>,  // None = default
-    expr: Box<Expr>,
-    span: Span,
 }
 
-━━━ Type Names (for sizeof, cast, compound literal) ━━━
-
-TypeName {
-    specifiers: DeclSpecifiers,
-    abstract_declarator: Option<AbstractDeclarator>,
-    span: Span,
+pub struct GenericAssociation {
+    pub type_name: Option<TypeName>,  // None = default
+    pub expr: Box<Expr>,
+    pub span: Span,
 }
 
-AbstractDeclarator {
-    pointers: Vec<PointerQualifiers>,
-    direct: Option<DirectAbstractDeclarator>,
-    span: Span,
+━━━ Type Names (for sizeof, cast, compound literal, _Alignas, _Atomic) ━━━
+
+pub struct TypeName {
+    pub specifiers: DeclSpecifiers,
+    pub abstract_declarator: Option<AbstractDeclarator>,
+    pub span: Span,
 }
 
-DirectAbstractDeclarator — enum:
+pub struct AbstractDeclarator {
+    pub pointers: Vec<PointerQualifiers>,
+    pub direct: Option<DirectAbstractDeclarator>,
+    pub span: Span,
+}
+
+pub enum DirectAbstractDeclarator {
     Parenthesized(Box<AbstractDeclarator>),
-    Array { base: Option<Box<DirectAbstractDeclarator>>, size: ArraySize, span: Span },
-    Function { base: Option<Box<DirectAbstractDeclarator>>, params: Vec<ParamDecl>, is_variadic: bool, span: Span },
+    Array {
+        base: Option<Box<DirectAbstractDeclarator>>,
+        size: ArraySize,
+        span: Span,
+    },
+    Function {
+        base: Option<Box<DirectAbstractDeclarator>>,
+        params: Vec<ParamDecl>,
+        is_variadic: bool,
+        span: Span,
+    },
+}
 
 ━━━ GNU Extensions ━━━
 
-GnuAttribute {
-    name: String,
-    args: Option<Vec<GnuAttributeArg>>,  // None = no parens; Some(vec![]) = empty parens
-    span: Span,
+pub struct GnuAttribute {
+    pub name: String,
+    pub args: Option<Vec<GnuAttributeArg>>,
+    pub span: Span,
 }
 
-GnuAttributeArg — enum:
+pub enum GnuAttributeArg {
     Ident(String),
     Expr(Box<Expr>),
-    // Could be more complex but this covers 95% of system headers
+    // Covers nested attributes: __attribute__((format(printf, 1, 2)))
+    Nested { name: String, args: Vec<GnuAttributeArg> },
+}
 
-━━━ Operator enums (ast_ops.rs) ━━━
+━━━ Operator enums — ast_ops.rs ━━━
 
-BinaryOp — enum:
+pub enum BinaryOp {
     Add, Sub, Mul, Div, Mod,
     BitAnd, BitOr, BitXor,
     Shl, Shr,
     LogAnd, LogOr,
     Eq, Ne, Lt, Gt, Le, Ge,
+}
 
-UnaryOp — enum:
+pub enum UnaryOp {
     PreIncrement, PreDecrement,
-    AddrOf, Deref,
-    Plus, Minus,
-    BitNot, LogNot,
+    AddrOf,    // &
+    Deref,     // *
+    Plus,      // +
+    Minus,     // -
+    BitNot,    // ~
+    LogNot,    // !
+}
 
-PostfixOp — enum:
-    PostIncrement, PostDecrement,
+pub enum PostfixOp {
+    PostIncrement,
+    PostDecrement,
+}
 
-AssignOp — enum:
-    Assign,
+pub enum AssignOp {
+    Assign,       // =
     AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
     BitAndAssign, BitOrAssign, BitXorAssign,
     ShlAssign, ShrAssign,
+}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-All AST node types should derive Debug and Clone.
-Every node that represents a source construct should have a `span: Span` field.
+All types: derive Debug, Clone.
+Every struct with a source location gets `pub span: Span`.
 
-Write a few tests that manually construct AST nodes to verify the types compile:
-- Build a simple FunctionDef node for `int main() { return 0; }`
-- Build a Declaration node for `unsigned long long x = 42;` 
-  (verify that type_specifiers is a Vec containing [Unsigned, Long, Long, Int])
-- Build an Expr node for `a + b * c` with correct nesting
-- Build a StructDef with members and a bit-field
+Write tests that manually construct AST nodes (verify types compile):
+- FunctionDef for `int main() { return 0; }`
+- Declaration for `unsigned long long x = 42;`
+  → type_specifiers = vec![Unsigned, Long, Long, Int]  (verify it's a Vec)
+- Expr for `a + b * c` with correct nesting
+- StructDef with a bit-field member
+- StructMember::StaticAssert variant (verify it exists)
+- Stmt::Expr with span (verify span field exists)
 
-Add forge_parser to workspace Cargo.toml. Add forge_lexer and forge_diagnostics 
-as dependencies.
+Add forge_parser to workspace Cargo.toml.
+Add forge_lexer and forge_diagnostics as dependencies.
 ```
 
 ### Prompt 3.2 — Parser infrastructure + Pratt expression parser
 
 ```
-Implement the parser infrastructure and expression parser in forge_parser.
+Implement parser infrastructure and the Pratt expression parser.
+
+NOTE ON DEPENDENCY: This prompt needs parse_type_name() for cast, sizeof(type),
+_Alignof(type), compound literal, and _Generic. But the full parse_type_name()
+comes in Prompt 3.3. To unblock expression parsing:
+
+→ Implement a MINIMAL parse_type_name() in this prompt that handles ONLY
+  primitive type keywords: void, char, short, int, long, float, double,
+  signed, unsigned, _Bool, _Complex (and combinations thereof).
+  No struct/enum, no complex declarators, no typedef names.
+  This is enough for cast/sizeof tests. The full version REPLACES it in 3.3.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 1 — Parser struct and helpers
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Create forge_parser/src/parser.rs with:
+Create forge_parser/src/parser.rs:
 
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    typedefs: Vec<HashSet<String>>,  // stack of scopes, last = current
+    /// Stack of typedef scopes. Last = current. 
+    /// An identifier is a typedef if it appears in ANY scope (walk top to bottom).
+    typedefs: Vec<HashSet<String>>,
     diagnostics: Vec<Diagnostic>,
+    /// Set to true when any error is emitted. Final Result uses this.
+    has_errors: bool,
 }
 
 Core methods:
-- peek() -> &Token                    // look at current token without consuming
-- peek_ahead(n: usize) -> &Token     // look n tokens ahead
-- advance() -> Token                  // consume and return current token
-- expect(kind: TokenKind) -> Result<Token, ()>  // consume if match, diagnostic if not
-- at(kind: TokenKind) -> bool         // check without consuming
-- eat(kind: TokenKind) -> Option<Token>  // consume if match, None if not
+- peek() -> &Token
+- peek_ahead(n: usize) -> &Token
+- advance() -> Token
+- expect(kind) -> Result<Token, ()>   // diagnostic on mismatch
+- at(kind) -> bool
+- eat(kind) -> Option<Token>
 - at_eof() -> bool
-- span_from(start: Span) -> Span      // merge start span with previous token's span
+- span_from(start: Span) -> Span      // merge start..previous token end
+- save_pos() -> usize                  // for backtracking
+- restore_pos(saved: usize)            // backtrack to saved position
 
-Typedef scope methods:
-- push_scope()           // push new HashSet onto typedefs stack
-- pop_scope()            // pop the top scope
-- add_typedef(name)      // insert into current (top) scope
-- is_typedef(name) -> bool  // check ALL scopes (walk stack top to bottom)
+Typedef scope:
+- push_scope()
+- pop_scope()
+- add_typedef(name: &str)
+- is_typedef(name: &str) -> bool       // check ALL scopes top to bottom
+- Add __builtin_va_list to the initial scope in the constructor
 
-pub fn parse(tokens: Vec<Token>) -> Result<TranslationUnit, Vec<Diagnostic>>
-  — entry point, creates Parser, calls parse_translation_unit()
+Entry point:
+pub fn parse(tokens: Vec<Token>) -> (TranslationUnit, Vec<Diagnostic>)
+  Always returns an AST (possibly partial) + diagnostics.
+  Callers check diagnostics to see if errors occurred.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 2 — Pratt expression parser
@@ -530,107 +656,213 @@ SECTION 2 — Pratt expression parser
 
 Create forge_parser/src/expr.rs with expression parsing methods on Parser.
 
-Core functions:
+Top-level entry points:
 - parse_expr() → Expr               // full expression including comma
-- parse_assignment_expr() → Expr     // assignment and above (no comma)
-- parse_conditional_expr() → Expr    // ternary and above
-- parse_pratt(min_bp: u8) → Expr     // the core Pratt loop
+- parse_assignment_expr() → Expr     // no comma (used in initializers, function args)
+- parse_constant_expr() → Expr       // alias for parse_conditional_expr() (used in case, enum values, bit-fields, array sizes, _Static_assert)
 
-The Pratt loop:
-1. Parse a prefix/primary expression (nud)
-2. Loop: peek at next token
-   - Get its infix/postfix binding power
-   - If binding power <= min_bp, stop
-   - Consume the operator and parse the right side
-   - Build the appropriate AST node
-3. Return the expression
+Core Pratt function:
+  parse_pratt(min_bp: u8) → Expr
 
-Prefix/primary (nud) parsing — parse_prefix():
-- IntegerLiteral → Expr::IntLiteral
-- FloatLiteral → Expr::FloatLiteral  
-- CharLiteral → Expr::CharLiteral
-- StringLiteral → Expr::StringLiteral (handle adjacent string concatenation!)
-- Identifier → Expr::Ident
-- LeftParen → THREE-WAY AMBIGUITY (see below)
-- Prefix operators: ++, --, &, *, +, -, ~, !
-- sizeof → sizeof(type) or sizeof expr (if followed by '(' check if type-name)
-- _Alignof → _Alignof(type)
-- _Generic → parse generic selection
+Pratt loop:
+  1. lhs = parse_prefix()             // nud: literal, ident, unary, paren, etc.
+  2. Loop:
+     a. Look at next token's infix/postfix binding power
+     b. If left_bp <= min_bp → break
+     c. Consume operator token
+     d. Parse right side with appropriate right_bp
+     e. Build AST node, assign to lhs
+  3. Return lhs
 
-THREE-WAY `(` AMBIGUITY — when parse_prefix sees LeftParen:
-1. Save current position (for backtracking)
-2. After `(`, check if the next token starts a type-name:
-   - Is it a type keyword (void, char, int, float, double, short, long,
-     signed, unsigned, _Bool, _Complex, _Atomic, struct, union, enum)?
-   - Is it a type qualifier (const, volatile, restrict)?
-   - Is it a known typedef name (check is_typedef())?
-3. If YES → tentatively parse type-name, expect `)`
-   - If next token is `{` → COMPOUND LITERAL: parse initializer list
-   - Else → CAST: parse the operand as a unary expression
-4. If NO → PARENTHESIZED EXPRESSION: parse expression, expect `)`
+━━━ Prefix parsing (nud) ━━━
 
-If the tentative type-name parse fails (e.g., it looked like a typedef but
-the grammar didn't work out), backtrack to saved position and parse as
-parenthesized expression.
+parse_prefix() dispatches on current token:
 
-Infix/postfix (led) parsing:
-- Binary operators: +, -, *, /, %, <<, >>, <, >, <=, >=, ==, !=, &, ^, |, &&, ||
-- Ternary: ? ... :  (right-associative: use lower right binding power)
-- Assignment: =, +=, -=, etc. (right-associative)
-- Comma: , (lowest precedence)
-- Postfix: 
-  - LeftParen → function call: parse argument list
-  - LeftBracket → array subscript: parse expression, expect ]
-  - Dot → member access
-  - Arrow → pointer member access
-  - PlusPlus → post-increment
-  - MinusMinus → post-decrement
+IntegerLiteral → Expr::IntLiteral { value, suffix, span }
+FloatLiteral → Expr::FloatLiteral { value, suffix, span }
+CharLiteral → Expr::CharLiteral { value, prefix, span }
 
-String literal concatenation:
-When you see a StringLiteral, peek ahead — if the next token is also a
-StringLiteral, concatenate them. This is required by C17 (adjacent string
-literals are merged in translation phase 6).
+StringLiteral → Expr::StringLiteral
+  IMPORTANT — adjacent string concatenation:
+  After consuming a StringLiteral, peek ahead. If next token is also StringLiteral,
+  consume and concatenate. Repeat until next is not StringLiteral.
+  Edge case: mixed prefixes like "hello" L"world" — for now, use the first
+  string's prefix and just concatenate the text. Proper handling is a sema concern.
 
-Binding powers (as u8 pairs for left/right):
-  Comma:       (2, 3)
-  Assignment:  (4, 3)   ← right-assoc: right bp LOWER than left
-  Ternary:     (6, 5)   ← right-assoc
-  LogOr:       (8, 9)
-  LogAnd:      (10, 11)
-  BitOr:       (12, 13)
-  BitXor:      (14, 15)
-  BitAnd:      (16, 17)
-  Equality:    (18, 19)
-  Relational:  (20, 21)
-  Shift:       (22, 23)
-  Additive:    (24, 25)
-  Multiplicative: (26, 27)
-  Prefix:      (_, 29)
-  Postfix:     (31, _)
+Identifier → Expr::Ident { name, span }
 
-Write THOROUGH tests:
-- Precedence: `1 + 2 * 3` → Add(1, Mul(2, 3))
-- Associativity: `a = b = c` → Assign(a, Assign(b, c))
-- Associativity: `a - b - c` → Sub(Sub(a, b), c)
-- Ternary: `a ? b : c ? d : e` → Cond(a, b, Cond(c, d, e))
-- Unary: `-!x` → Minus(LogNot(x))
-- Postfix chain: `a[0].b->c++` → correct nesting
-- Function call: `f(a, b, c)` → FunctionCall with 3 args
-- Cast: `(int)x` → Cast(int, x) — requires setting up "int" as known type
-- Compound literal: `(int[]){1, 2}` → CompoundLiteral
-- sizeof: `sizeof(int)` vs `sizeof x` — both forms
-- String concatenation: `"hello" " " "world"` → single StringLiteral "hello world"
-- Comma: `a, b, c` → Comma([a, b, c])
-- Complex: `*p++ = f(a + b, c)` → correct tree
+LeftParen → THREE-WAY AMBIGUITY:
+  1. Save position with save_pos()
+  2. Advance past `(`
+  3. Check: does the next token start a type-name?
+     - Type keywords: void, char, short, int, long, float, double,
+       signed, unsigned, _Bool, _Complex, _Atomic, struct, union, enum
+     - Type qualifiers: const, volatile, restrict
+     - Known typedef name: is_typedef(token_text)
+  4. If YES:
+     a. Try parse_type_name() (minimal version for now)
+     b. If succeed and next token is `)`:
+        - Consume `)`
+        - If next token is `{` → COMPOUND LITERAL:
+          parse initializer list, return Expr::CompoundLiteral
+        - Else → CAST:
+          parse operand as parse_pratt(29) (unary precedence),
+          return Expr::Cast
+     c. If type-name parse fails → backtrack: restore_pos(), fall through to (5)
+  5. If NO (or backtracked):
+     PARENTHESIZED EXPRESSION: parse_expr(), expect `)`, return the inner expr
+
+Prefix operators:
+  PlusPlus   → Expr::UnaryOp { PreIncrement, parse_pratt(29) }
+  MinusMinus → Expr::UnaryOp { PreDecrement, parse_pratt(29) }
+  Ampersand  → Expr::UnaryOp { AddrOf, parse_pratt(29) }
+  Star       → Expr::UnaryOp { Deref, parse_pratt(29) }
+  Plus       → Expr::UnaryOp { Plus, parse_pratt(29) }
+  Minus      → Expr::UnaryOp { Minus, parse_pratt(29) }
+  Tilde      → Expr::UnaryOp { BitNot, parse_pratt(29) }
+  Bang       → Expr::UnaryOp { LogNot, parse_pratt(29) }
+
+sizeof:
+  If next token is `(` AND token after `(` starts a type-name:
+    → consume `(`, parse_type_name(), expect `)`, return Expr::SizeofType
+  Else:
+    → parse_pratt(29), return Expr::SizeofExpr
+  Note: `sizeof(x)` where x is a typedef → SizeofType. Where x is a variable → SizeofExpr with parens. The typedef table resolves this.
+
+_Alignof:
+  Expect `(`, parse_type_name(), expect `)`, return Expr::AlignofType.
+  (_Alignof only applies to types, never expressions, in C11.)
+
+_Generic:
+  _Generic `(` assignment-expr `,` generic-assoc-list `)`
+  Where generic-assoc is:
+    type-name `:` assignment-expr
+    | `default` `:` assignment-expr
+  Comma-separated. At most one `default`.
+  NOTE: type-name here uses the minimal parse_type_name().
+  Build Expr::GenericSelection.
+
+━━━ Infix/postfix parsing (led) ━━━
+
+Binary operators — all use the binding powers from the table:
+  + - * / % << >> < > <= >= == != & ^ | && ||
+  Each: consume op, rhs = parse_pratt(right_bp), build Expr::BinaryOp
+
+Ternary ? :
+  After `?`: parse full expression (including comma — C allows it in middle),
+  expect `:`, parse_pratt(right_bp=5) for the else branch.
+  Right-associative: `a ? b : c ? d : e` = Cond(a, b, Cond(c, d, e))
+
+Assignment operators = += -= *= /= %= <<= >>= &= ^= |=
+  Right-associative (right_bp=3): rhs = parse_pratt(3)
+  Build Expr::Assignment
+
+Comma operator:
+  Left-associative (right_bp=3). Build Expr::Comma.
+  Collect multiple: a, b, c → Comma([a, b, c])
+
+Postfix operators:
+  LeftParen → FUNCTION CALL:
+    Parse argument list (comma-separated assignment-exprs), expect `)`
+    Build Expr::FunctionCall
+
+  LeftBracket → ARRAY SUBSCRIPT:
+    Parse expression, expect `]`
+    Build Expr::ArraySubscript
+
+  Dot → MEMBER ACCESS:
+    Expect identifier, build Expr::MemberAccess { is_arrow: false }
+
+  Arrow → MEMBER ACCESS:
+    Expect identifier, build Expr::MemberAccess { is_arrow: true }
+
+  PlusPlus → Expr::PostfixOp { PostIncrement }
+  MinusMinus → Expr::PostfixOp { PostDecrement }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — Minimal parse_type_name (temporary)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This is a TEMPORARY minimal version. Prompt 3.3 replaces it with the full version.
+
+parse_type_name_minimal() → Option<TypeName>:
+  Collect type specifier keywords (void, char, short, int, long, float, double,
+  signed, unsigned, _Bool, _Complex) and type qualifiers (const, volatile, restrict).
+  Then optionally parse pointer prefix(es): * with optional qualifiers.
+  Return TypeName with the collected specifiers and optional abstract declarator.
+
+  This handles: (int), (const int), (unsigned long long), (int *), (const char **)
+  Does NOT handle: (struct foo), (enum bar), (int [10]), (int (*)(int))
+  Those come in 3.3.
+
+Mark with a comment: // TODO(3.3): replace with full parse_type_name
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — Tests
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Helper: create a function that takes a C expression string, wraps it in
+a minimal context to lex+preprocess, then calls parse_expr(), returns Expr.
+
+Precedence tests:
+- `1 + 2 * 3` → Add(1, Mul(2, 3))
+- `1 * 2 + 3` → Add(Mul(1, 2), 3)
+- `a + b + c` → Add(Add(a, b), c)  (left assoc)
+- `a = b = c` → Assign(a, Assign(b, c))  (right assoc)
+- `a - b - c` → Sub(Sub(a, b), c)  (left assoc)
+
+Ternary:
+- `a ? b : c` → Conditional(a, b, c)
+- `a ? b : c ? d : e` → Conditional(a, b, Conditional(c, d, e))
+
+Unary:
+- `-x` → UnaryOp(Minus, Ident(x))
+- `!a && b` → LogAnd(LogNot(a), b)
+- `*p++` → Deref(PostIncrement(p))
+- `-!x` → Minus(LogNot(x))
+- `++*p` → PreIncrement(Deref(p))
+
+Postfix:
+- `a[0]` → ArraySubscript(a, 0)
+- `a.b` → MemberAccess(a, "b", arrow=false)
+- `a->b` → MemberAccess(a, "b", arrow=true)
+- `a[0].b->c++` → correct nesting (left to right)
+- `f(a, b, c)` → FunctionCall(f, [a, b, c])
+- `f()` → FunctionCall(f, [])
+
+Cast (using minimal type-name):
+- `(int)x` → Cast(Int, x)
+- `(unsigned long)x` → Cast([Unsigned, Long], x)
+- `(int *)(void *)p` → Cast(int*, Cast(void*, p))
+
+Sizeof:
+- `sizeof(int)` → SizeofType(Int)
+- `sizeof x` → SizeofExpr(Ident(x))
+- `sizeof(x)` → SizeofExpr(Ident(x))  (x is NOT a typedef, so it's expr)
+
+Compound literal (minimal):
+- `(int){42}` → CompoundLiteral(Int, [42])
+
+String concatenation:
+- `"hello" " " "world"` → StringLiteral("hello world")
+
+Comma:
+- `a, b, c` → Comma([a, b, c])
+
+Complex:
+- `*p++ = f(a + b, c)` → correct tree
+- `a || b && c` → LogOr(a, LogAnd(b, c))
+- `a & b == c` → BitAnd(a, Eq(b, c))  (== binds tighter than &)
+
+_Generic (using minimal type-name):
+- `_Generic(x, int: 1, float: 2, default: 0)`
 ```
 
-### Prompt 3.3 — Declaration specifiers + simple declarators + typedef tracking
+### Prompt 3.3 — Declaration specifiers + declarators + typedef tracking
 
 ```
-Implement declaration specifier parsing, simple declarators, and typedef tracking.
-
-This prompt handles the FIRST HALF of C declaration parsing. Complex declarators
-(arrays, function pointers), struct/enum definitions, and initializers come in 3.4.
+Implement declaration specifier parsing, simple declarators, typedef tracking,
+and the FULL parse_type_name() (replacing the minimal version from 3.2).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 1 — Declaration specifiers
@@ -638,681 +870,940 @@ SECTION 1 — Declaration specifiers
 
 parse_declaration_specifiers() → DeclSpecifiers
 
-Loop consuming tokens that are valid specifiers:
+Loop collecting specifiers. On each iteration, check the current token:
 
-Storage class keywords: auto, register, static, extern, typedef, _Thread_local
-  → Only one storage class per declaration (error on duplicates)
+Storage class: auto, register, static, extern, typedef, _Thread_local
+  → Only ONE storage class per declaration. Second one → error diagnostic.
+  → Store in storage_class field.
 
-Type specifier keywords: void, char, short, int, long, float, double, 
+Type specifier keywords: void, char, short, int, long, float, double,
   signed, unsigned, _Bool, _Complex
-  → Collect into Vec<TypeSpecifierToken>
-  → Multiple are allowed: `unsigned long long int` = 4 entries
-  → Some combinations are invalid (e.g., `float double`) — we detect this in
-    sema, NOT here. The parser just collects.
+  → Push into type_specifiers Vec.
+  → Multiple are legal: `unsigned long long int` = 4 entries.
+  → Invalid combos (float double) detected by sema, NOT here.
 
-Type qualifiers: const, volatile, restrict, _Atomic
-  → Collect into Vec, duplicates allowed (redundant but legal)
+Type qualifiers: const, volatile, restrict
+  → Push into type_qualifiers Vec.
+  → Duplicates allowed (redundant but legal in C).
+
+_Atomic:
+  → _Atomic followed by `(` → parse_type_name in parens → TypeSpecifierToken::Atomic
+  → _Atomic NOT followed by `(` → TypeQualifier::Atomic
 
 Function specifiers: inline, _Noreturn
+  → Push into function_specifiers Vec.
 
-Known typedef names: if an identifier is in the typedef set AND we haven't
-  already seen a type specifier that would make this a redeclaration, treat
-  it as TypeSpecifierToken::TypedefName(name).
-  EDGE CASE: `typedef int T; { T T; }` — the second T is a variable named T
-  using type T. Once we've seen a type specifier, further identifiers are
-  declarator names, not typedefs.
+_Alignas:
+  → _Alignas `(` → try type-name first; if fails, parse expression → AlignSpec
 
-_Alignas(type) or _Alignas(expr) → AlignSpec
+struct / union / enum:
+  → Call parse_struct_or_union_specifier() / parse_enum_specifier()
+    (placeholder stub for now — implemented in 3.4)
+  → Push result into type_specifiers Vec.
 
-struct/union/enum → handled in Prompt 3.4 (for now, just call a placeholder
-  parse_struct_or_union_specifier() that you'll implement next prompt)
+Typedef name resolution (CRITICAL):
+  If current token is an Identifier AND is_typedef(name) returns true:
+    → ONLY treat as typedef if we haven't seen another type specifier yet.
+    → Edge case: `typedef int T; { T T; }` — second `T T;` means
+      "variable named T of type T". Once we've already collected a type 
+      specifier (the first T as TypedefName), the second T is a declarator name.
+    → Implementation: track a `bool seen_type_specifier` in the loop.
+      If seen_type_specifier is true, STOP — don't treat the identifier as typedef.
+    → Push TypeSpecifierToken::TypedefName(name) into type_specifiers.
 
-__attribute__((...)) → skip for now (call skip_gnu_attribute() placeholder)
+__attribute__((...)) → call skip_gnu_attributes() (placeholder for 3.6)
 
-The specifier loop stops when the next token is NOT a specifier keyword,
-typedef name, or qualifier.
+GNU keyword equivalents (handle these NOW, not in 3.6, because they appear in
+declaration specifiers of system headers even before 3.6):
+  __const, __const__       → TypeQualifier::Const
+  __volatile, __volatile__ → TypeQualifier::Volatile
+  __restrict, __restrict__ → TypeQualifier::Restrict
+  __inline, __inline__     → FunctionSpecifier::Inline
+  __signed, __signed__     → TypeSpecifierToken::Signed
+  __extension__            → consume and continue (no-op)
+
+Loop termination: stop when token is NOT a specifier keyword, qualifier, 
+typedef name, or GNU keyword.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 2 — Simple declarators
+SECTION 2 — Declarators
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 parse_declarator() → Declarator
 
-A declarator is: optional pointer prefix(es) + direct-declarator
+Structure: pointer-prefix* direct-declarator suffix*
 
-Pointer prefix: * optionally followed by type qualifiers (const, volatile, etc.)
-  Can be chained: `int **const *volatile x;` = three pointer levels
-  Parse as Vec<PointerQualifiers>
+Pointer prefix:
+  While current token is `*`:
+    Consume `*`
+    Collect optional qualifiers (const, volatile, restrict, _Atomic)
+    Also handle __attribute__ after * (e.g., `* __attribute__((aligned)) p`)
+    Push PointerQualifiers { qualifiers, attributes }
 
-Direct declarator (simple version for now):
-  - Identifier → DirectDeclarator::Identifier
-  - ( declarator ) → DirectDeclarator::Parenthesized (for grouping, e.g., (*fp))
+Direct declarator (parse_direct_declarator):
+  Base:
+    Identifier → DirectDeclarator::Identifier(name, span)
+    LeftParen → DirectDeclarator::Parenthesized(Box<parse_declarator()>)
+      Consume `)`. This handles `(*fp)` grouping.
 
-Suffixes on direct-declarator will be added in Prompt 3.4:
-  - [size] for arrays
-  - (params) for functions
-  For now, implement these as stubs or TODOs.
+  Suffixes (loop until no more [ or ( ):
+    LeftBracket → Array suffix:
+      `[]` → ArraySize::Unspecified
+      `[*]` → ArraySize::VLAStar  (only in function prototypes)
+      `[static expr]` → is_static=true, ArraySize::Expr
+      `[const expr]` / `[restrict expr]` → qualifiers + ArraySize::Expr
+      `[expr]` → ArraySize::Expr
+      Expect `]`
+      Wrap current in DirectDeclarator::Array { base: current, ... }
+
+    LeftParen → Function suffix:
+      Parse parameter list (Section 3)
+      Wrap current in DirectDeclarator::Function { base: current, params, is_variadic }
 
 parse_abstract_declarator() → AbstractDeclarator
-  Same as declarator but no identifier (used in type-names for sizeof, cast, etc.)
+  Same structure but no identifier. Used in type-names (sizeof, cast, etc.)
+  Direct abstract declarator: can start with `(` (paren group) or `[` (array)
+  or `(` (function params), with no identifier at the base.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 3 — Declaration and init-declarator list
+SECTION 3 — Parameter list
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+parse_parameter_list() → (Vec<ParamDecl>, bool)
+
+After `(`:
+- `(void)` → zero params, not variadic
+  (only when `void` is the single token before `)`)
+- `()` → zero params, not variadic (C treats as unspecified params)
+- Otherwise:
+  Loop parsing parameter declarations:
+    1. Parse declaration specifiers
+    2. Optionally parse declarator or abstract-declarator
+       - If the next non-pointer token is Identifier → parse_declarator()
+       - Otherwise → parse_abstract_declarator() (or nothing)
+    3. If next token is `,`:
+       - If the token after `,` is `...` → consume `,` and `...`, set is_variadic=true, break
+       - Otherwise → consume `,`, continue loop
+    4. If next token is `)` → break
+
+Expect `)` at the end.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — Full parse_type_name (replaces minimal version)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+parse_type_name() → TypeName
+
+REPLACE the minimal version from 3.2 with:
+  1. Parse declaration specifiers (now handles struct/union/enum too, once 3.4 stubs are in)
+  2. Optionally parse abstract declarator
+
+This is used by:
+  - Cast expressions: (type-name) expr
+  - Compound literals: (type-name) { ... }
+  - sizeof(type-name)
+  - _Alignof(type-name)
+  - _Alignas(type-name)
+  - _Atomic(type-name)
+  - _Generic associations
+
+After replacing, all expression tests from 3.2 should still pass, and now
+casts with complex types work: (struct Point *)p, (int (*)(int))fp, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — Declaration and init-declarator list
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 parse_declaration() → Declaration
 
 1. Parse declaration specifiers
-2. If followed by `;` → declaration with no declarators (e.g., `struct foo;`)
+2. If followed by `;` → empty declaration (e.g., `struct foo;`, `enum bar;`)
 3. Otherwise parse init-declarator-list:
    - parse_declarator()
-   - If followed by `=` → parse_initializer() (simple expr form for now;
-     brace-enclosed initializer lists come in 3.4)
-   - If followed by `,` → continue to next init-declarator
+   - If `=` follows → parse_initializer()
+     (for now, only Initializer::Expr — brace-init comes in 3.4)
+   - If `,` follows → continue to next init-declarator
    - Expect `;` at end
 
-4. CRITICAL — typedef tracking:
-   If the specifiers included StorageClass::Typedef, then for each declarator
-   in the init-declarator list, extract the declared name and call add_typedef().
-   Example: `typedef unsigned long size_t;` → add "size_t" to typedef set
-   Example: `typedef int (*handler_t)(int);` → add "handler_t" to typedef set
-   The name is found by walking the declarator to find the Identifier node.
+4. TYPEDEF TRACKING (critical):
+   If specifiers.storage_class == Some(Typedef):
+     For each declarator, extract the declared name:
+       Walk the DirectDeclarator tree to find the Identifier node.
+       Helper: fn declarator_name(d: &Declarator) -> Option<&str>
+     Call add_typedef(name) for each.
 
-parse_type_name() → TypeName
-  Used by sizeof(type), cast, compound literal, _Alignas(type), _Atomic(type).
-  It's like a declaration but with an abstract declarator (no name).
-  1. Parse declaration specifiers
-  2. Optionally parse abstract declarator
+   Examples:
+     `typedef unsigned long size_t;` → add "size_t"
+     `typedef int (*handler_t)(int);` → add "handler_t"
+     `typedef int T, *PT;` → add "T" AND "PT"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 4 — The declaration/expression ambiguity
+SECTION 6 — Declaration vs expression ambiguity
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-At block scope, when parsing a block-item, the parser must decide:
-is this a declaration or a statement?
+is_start_of_declaration() → bool
 
-is_start_of_declaration() → bool:
-  Peek at the current token:
-  - Type keywords (void, char, int, float, etc.) → declaration
-  - Storage class keywords (static, extern, typedef, etc.) → declaration
-  - Type qualifiers at start (const, volatile) → declaration
-  - _Static_assert → special declaration
-  - struct, union, enum → declaration
-  - Known typedef name → declaration (THIS is why typedef tracking matters)
-  - __attribute__ → declaration (followed by declaration specifiers)
-  - Anything else → statement (expression statement, if, while, etc.)
+Peek at current token:
+  Type keywords → true
+  Storage class keywords → true
+  Type qualifiers (const, volatile, restrict) at start → true
+  _Alignas → true
+  _Static_assert → true
+  struct, union, enum → true
+  Known typedef name (is_typedef) → true
+  __attribute__ → true
+  __extension__ → true (often precedes typedef/declaration in headers)
+  GNU type keywords (__signed__, __const, etc.) → true
+  Anything else → false
 
-This function is called in parse_block_item() to choose between
-parse_declaration() and parse_statement().
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7 — Tests
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Write tests:
-- Parse `int x;` → declaration with type_specifiers=[Int], one declarator "x"
-- Parse `unsigned long long x;` → type_specifiers=[Unsigned, Long, Long], declarator "x"
-- Parse `const int *p;` → qualifier=Const, specifier=Int, one pointer level
-- Parse `int **const *x;` → three pointer levels, middle has Const
-- Parse `int x = 5;` → declarator "x" with initializer IntLiteral(5)
-- Parse `int x, y, *z;` → three init-declarators
-- Parse `typedef int MyInt;` → "MyInt" added to typedef set
-- Parse `MyInt x;` after typedef → resolves MyInt as type specifier
-- Parse `int (*fp);` → parenthesized declarator
-- Parse `int x; x * y;` → first is declaration, second is expression (multiply)
-- Parse `typedef int T; T * x;` → second is declaration (pointer to T), not multiply
+Helper: parse_decl(source) → parse a declaration string, return Declaration.
+
+- `int x;` → specifiers=[Int], declarator "x", no initializer
+- `unsigned long long x;` → specifiers=[Unsigned, Long, Long], declarator "x"
+- `long unsigned int long x;` → specifiers=[Long, Unsigned, Int, Long] (order preserved)
+- `const int *p;` → qualifiers=[Const], specifiers=[Int], 1 pointer level
+- `int *const p;` → declarator has pointer with Const qualifier
+- `int **const *volatile p;` → three pointer levels with correct qualifiers
+- `int x = 5;` → initializer IntLiteral(5)
+- `int x = 1 + 2;` → initializer BinaryOp(Add, 1, 2)
+- `int x, y, *z;` → three init-declarators
+- `typedef int MyInt;` → "MyInt" in typedef set
+- `MyInt x;` after typedef → type_specifiers=[TypedefName("MyInt")]
+- `typedef int T; T * x;` → x is pointer-to-T declaration (NOT multiplication)
+- `int x; x * y;` → second is expression statement (multiplication)
+- `typedef int T; { T T; }` → inner: type T, name T (edge case)
+- `int (*fp);` → parenthesized declarator
+- `int f(int a, char *b);` → function declarator with 2 params
+- `int f(void);` → function with no params
+- `int f(int, ...);` → variadic, abstract first param
+- `int arr[10];` → array with size=Expr(10)
+- `int arr[];` → array with size=Unspecified
+- `int (*fp)(int, int);` → pointer to function
+- `int (*arr[10])(void);` → array of 10 function pointers
+
+Re-run all Prompt 3.2 expression tests — they must still pass.
 ```
 
-### Prompt 3.4 — Complex declarators, struct/enum, initializers
+### Prompt 3.4 — Struct/union/enum definitions + initializer lists
 
 ```
-Implement complex declarators (array, function), struct/union/enum definitions,
-and brace-enclosed initializer lists.
+Implement struct/union/enum definitions and brace-enclosed initializer lists.
+Replace the placeholder stubs from 3.3.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 1 — Declarator suffixes (array and function)
+SECTION 1 — Struct and union definitions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Extend parse_direct_declarator() with suffix parsing.
+parse_struct_or_union_specifier(kind: StructOrUnion) → TypeSpecifierToken
 
-After parsing the identifier or parenthesized declarator, loop checking for:
+After `struct` or `union` keyword:
+1. Optional __attribute__((...)) → skip for now (placeholder)
+2. Optional name (identifier)
+3. If followed by `{`:
+   parse_struct_member_list():
+   Loop until `}`:
+     - If _Static_assert → parse_static_assert(), push StructMember::StaticAssert
+     - Otherwise:
+       a. Parse declaration specifiers
+       b. Parse struct-declarator-list (comma-separated):
+          - Optional declarator (can be None for anonymous bit-field)
+          - Optional `: constant-expr` for bit-width
+          - `int x;` → declarator=Some("x"), bit_width=None
+          - `int x : 3;` → declarator=Some("x"), bit_width=Some(3)
+          - `int : 5;` → declarator=None, bit_width=Some(5)
+       c. Expect `;`
+       d. Push StructMember::Field
+4. If no `{`:
+   Forward declaration: `struct foo` (name only, members=None)
+   Must have a name — `struct;` is an error.
 
-Array suffix: [
-  - `[]` → ArraySize::Unspecified
-  - `[expr]` → ArraySize::Expr
-  - `[*]` → ArraySize::VLA (only in function prototypes)
-  - `[static expr]` → is_static=true, ArraySize::Expr
-  - `[const expr]` → qualifiers, ArraySize::Expr
-  Build DirectDeclarator::Array wrapping the current direct-declarator as base.
+5. Optional trailing __attribute__ → skip
 
-Function suffix: (
-  - Parse parameter-type-list (see Section 2)
-  - Or empty `()` → no params, not variadic (old-style, we treat as no params)
-  - `(void)` → explicitly no params
-  Build DirectDeclarator::Function wrapping current as base.
+Build StructDef { kind, name, members, attributes, span }
 
-This is recursive in nature: `int (*fp)(int, int)` is:
-  1. Pointer declarator wrapping parenthesized declarator `fp`
-  2. Function suffix with (int, int) parameters
-The parsing naturally handles this via the base-then-suffix approach.
+Anonymous struct/union members (C11):
+  `struct S { union { int x; float f; }; int y; };`
+  The inner union has no declarator — this is already handled because
+  the struct-declarator-list can have declarator=None.
+  But there's a subtlety: the member declaration has specifiers (union {...})
+  and NO declarator at all (not even an anonymous bit-field). Handle this:
+  if after specifiers we see `;` directly, create a StructField with an
+  empty declarators vec.
 
-Also extend parse_direct_abstract_declarator() with the same suffix logic
-(but no identifier, for type-names in casts/sizeof).
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 2 — Parameter list
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-parse_parameter_list() → (Vec<ParamDecl>, bool)  // params + is_variadic
-
-- Parse comma-separated parameter declarations
-- Each param: declaration-specifiers + optional declarator (or abstract-declarator)
-  - `int x` → specifiers=[Int], declarator=Identifier("x")
-  - `int *` → specifiers=[Int], abstract declarator with pointer
-  - `int` → specifiers=[Int], no declarator
-- If `...` appears after the last comma → is_variadic = true
-- `(void)` with no declarator → zero params, not variadic
-- `()` → zero params (ambiguous with old-style, but we treat as no params)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 3 — Struct and union definitions
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-parse_struct_or_union_specifier() → TypeSpecifierToken
-
-After `struct` or `union`:
-1. Optional name (identifier)
-2. If followed by `{` → parse member list:
-   - Each member: declaration-specifiers + struct-declarator-list ;
-   - struct-declarator: optional declarator + optional `: bit-width`
-     - `int x;` → normal member
-     - `int x : 3;` → bit-field
-     - `int : 5;` → anonymous bit-field (no declarator, just width)
-   - Loop until `}`
-3. If no `{` → forward declaration: `struct foo` (just a name, no members)
-
-Both forms produce TypeSpecifierToken::Struct(StructDef) or ::Union(...)
+Flexible array member:
+  `struct S { int n; int data[]; };`
+  The last member can have ArraySize::Unspecified. Parser allows it;
+  sema validates it's actually the last member.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 4 — Enum definitions
+SECTION 2 — Enum definitions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 parse_enum_specifier() → TypeSpecifierToken
 
 After `enum`:
-1. Optional name
-2. If followed by `{` → parse enumerator list:
-   - Comma-separated: name [= constant-expr]
-   - Trailing comma before `}` is allowed
-   - Each enumerator creates Enumerator { name, value }
-3. If no `{` → forward reference
+1. Optional __attribute__ → skip
+2. Optional name
+3. If followed by `{`:
+   Parse enumerator list (comma-separated):
+     name [= constant-expr] [__attribute__(...)]
+   Trailing comma before `}` is ALLOWED (C99+):
+     `enum { A, B, C, }` — valid
+   Empty enum `enum {}` — invalid, emit error
+4. If no `{`:
+   Forward reference: `enum color` (name only)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 5 — Initializer lists (brace-enclosed)
+SECTION 3 — Initializer lists
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Extend parse_initializer() to handle brace-enclosed lists:
+Extend parse_initializer() (currently only handles Expr):
 
 parse_initializer() → Initializer:
-  If current token is `{` → parse_initializer_list()
+  If `{` → parse_initializer_list()
   Else → Initializer::Expr(parse_assignment_expr())
 
 parse_initializer_list() → Initializer::List:
   After `{`:
-  - Parse comma-separated designated-initializers
-  - Each: optional designator-list + initializer
-  - Designators: `.field` or `[index]`, can be chained: `.pos[0].x`
-  - Trailing comma before `}` is allowed (C99+)
-  - Nested: `{ {1, 2}, {3, 4} }` is valid (nested brace-enclosed lists)
+  Loop:
+    1. Parse optional designator list:
+       `.field` → Designator::Field
+       `[expr]` → Designator::Index
+       Can be chained: `.pos[0].x` = [Field("pos"), Index(0), Field("x")]
+       Designators followed by `=`
+    2. Parse initializer (recursive — can be nested `{...}`)
+    3. Push DesignatedInit { designators, initializer }
+    4. If `,` → consume and continue (but if next is `}` → trailing comma, break)
+    5. If `}` → break
+  Expect `}`
 
-Write tests:
-- Simple array: `int a[3];`
-- Multi-dimensional: `int a[2][3];`
-- Function declaration: `int f(int a, char *b);`
-- Function pointer: `int (*fp)(int, int);`
-- Array of function pointers: `int (*fps[10])(void);`
-- Complex: `int (*(*fp)(int))[10];` (pointer to function returning pointer to array)
-- Struct with members: `struct Point { int x; int y; };`
-- Struct with bit-fields: `struct Flags { unsigned int a : 1; unsigned int b : 3; };`
-- Anonymous bit-field: `struct { int : 4; int x : 4; };`
-- Enum: `enum Color { RED, GREEN = 5, BLUE };`
-- Initializer list: `int a[] = {1, 2, 3};`
-- Designated init: `struct Point p = { .x = 1, .y = 2 };`
-- Nested init: `int m[2][2] = { {1, 2}, {3, 4} };`
-- Array designated: `int a[10] = { [5] = 50, [9] = 90 };`
-- VLA parameter: `void f(int n, int arr[n]);`
-- `(void)` parameter: `int f(void);`
-- Variadic: `int printf(const char *fmt, ...);`
-```
-
-### Prompt 3.5 — Statements, top-level parsing, error recovery
-
-```
-Implement statement parsing, top-level translation unit parsing, and error recovery.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 1 — Statement parsing
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-parse_statement() → Stmt:
-
-Dispatch based on current token:
-  `{`         → parse_compound_statement()
-  `if`        → parse_if_statement()
-  `while`     → parse_while_statement()
-  `do`        → parse_do_while_statement()
-  `for`       → parse_for_statement()
-  `switch`    → parse_switch_statement()
-  `case`      → parse_case_statement()
-  `default`   → parse_default_statement()
-  `return`    → parse_return_statement()
-  `break`     → Stmt::Break, expect `;`
-  `continue`  → Stmt::Continue, expect `;`
-  `goto`      → Stmt::Goto(identifier), expect `;`
-  `;`         → Stmt::Expr(None) — empty statement
-  identifier followed by `:` → Stmt::Label { name, stmt }
-  otherwise   → expression-statement: parse_expr(), expect `;`
-
-Compound statement:
-  `{` block-item* `}`
-  push_scope() before, pop_scope() after (typedef scoping!)
-  block-item: call is_start_of_declaration() → Declaration or Statement
-
-If statement:
-  `if` `(` expr `)` stmt [else stmt]
-  Dangling else: else binds to the innermost if (natural with recursive descent)
-
-For statement:
-  `for` `(` init `;` condition `;` update `)` body
-  init can be:
-  - A declaration (check is_start_of_declaration())
-  - An expression
-  - Empty (just `;`)
-  For declarations in init: `for (int i = 0; ...)` — the scope of `i` is the for body.
-  Push scope before parsing init, pop after body.
-
-Switch / case / default:
-  `switch` `(` expr `)` stmt  (stmt is usually a compound)
-  `case` constant-expr `:` stmt
-  `default` `:` stmt
-
-Do-while:
-  `do` stmt `while` `(` expr `)` `;`
-
-_Static_assert:
-  `_Static_assert` `(` constant-expr `,` string-literal `)` `;`
-  (C23 makes the string optional — support both forms)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 2 — Top-level parsing
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-parse_translation_unit() → TranslationUnit:
-
-Loop until EOF:
-  parse_external_declaration() → ExternalDeclaration
-
-parse_external_declaration():
-  1. Parse declaration specifiers
-  2. If followed by `;` → declaration with no declarator (e.g., `struct foo;`)
-  3. Parse first declarator
-  4. DECISION POINT — function definition or declaration?
-     - If the declarator is a function declarator AND next token is `{`
-       → FunctionDef: parse compound statement as body
-     - Otherwise → Declaration: parse rest of init-declarator list, expect `;`
-
-  This means: `int main() { return 0; }` is:
-    specifiers=[Int], declarator=Function("main", []), body={return 0}
-
-  And: `int foo(int x);` is:
-    specifiers=[Int], init_declarators=[Function("foo", [int x])], semicolon
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 3 — Error recovery
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-When an unexpected token is encountered:
-1. Emit a diagnostic with the token's span and a descriptive message
-   e.g., "expected ';' after declaration" or "unexpected token 'foo' in expression"
-
-2. Synchronize by skipping tokens until a recovery point:
-   synchronize() method:
-   - Skip tokens until one of:
-     - `;` (consume it — end of statement/declaration)
-     - `}` (do NOT consume — it might close an enclosing block)
-     - `{` (do NOT consume — it might start a function body)
-     - A token at start of line that looks like a new declaration
-       (type keyword, storage class keyword)
-     - EOF
-
-3. After synchronizing, return a synthetic "error" node or simply continue
-   parsing from the recovery point.
-
-4. Collect ALL errors — don't stop at the first one. Return all diagnostics
-   at the end.
-
-5. Set an error flag so the final Result reflects that errors occurred,
-   even though the AST was (partially) built.
+  Empty initializer list `{}` — technically not valid in C17 (valid in C23).
+  Accept it with no error (many compilers allow it as extension).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 4 — Tests
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Write tests:
-- `int main() { return 0; }` → FunctionDef, compound with return
-- `void f() { if (x) y(); else z(); }` → if/else
-- `void f() { while (1) { break; } }` → while + break
-- `void f() { do { x++; } while (x < 10); }` → do-while
-- `void f() { for (int i = 0; i < n; i++) sum += i; }` → for with decl init
-- `void f() { for (;;) break; }` → infinite for
-- `void f() { switch (x) { case 1: a(); break; default: b(); } }` → switch
-- `void f() { goto end; end: return; }` → goto + label
-- Multiple functions in one file → TranslationUnit with multiple ExternalDeclarations
-- Nested blocks with local declarations and typedef scoping
-- Empty statement: `void f() { ; }` → Stmt::Expr(None)
-- _Static_assert(sizeof(int) == 4, "oops");
-- Error recovery: `int x = ;` → error, but parsing continues to next declaration
-- Error recovery: `int f() { int x = 5 int y = 6; }` → missing `;`, recovers
-- Multiple errors in one file → all reported
+Struct/Union:
+- `struct Point { int x; int y; };` → 2 members
+- `struct { int x; } anon;` → anonymous struct
+- `struct Flags { unsigned a : 1; unsigned b : 3; };` → bit-fields
+- `struct { int : 4; int x : 4; };` → anonymous bit-field + named
+- `struct Node { int val; struct Node *next; };` → self-referential (forward ref)
+- `struct Outer { struct Inner { int x; } inner; int y; };` → nested struct def
+- `union Val { int i; float f; double d; };` → union
+- `struct S { union { int x; float f; }; int y; };` → anonymous union member (C11)
+- `struct S { int n; int data[]; };` → flexible array member
+- `struct S { _Static_assert(sizeof(int) == 4, "oops"); int x; };` → static assert in struct
+- `struct S;` → forward declaration
+
+Enum:
+- `enum Color { RED, GREEN, BLUE };` → 3 enumerators, no values
+- `enum { A = 0, B = 5, C };` → with explicit values
+- `enum E { X, Y, Z, };` → trailing comma is valid
+- `enum E;` → forward reference
+
+Initializer lists:
+- `int a[] = {1, 2, 3};` → List with 3 items
+- `int a[2][2] = { {1, 2}, {3, 4} };` → nested lists
+- `struct Point p = { .x = 1, .y = 2 };` → field designators
+- `int a[10] = { [5] = 50, [9] = 90 };` → index designators
+- `struct { struct Point pos; } s = { .pos = { .x = 1, .y = 2 } };` → nested designated
+- `struct Point p = { .x = 1, .y = 2, };` → trailing comma
+- `int a[] = {};` → empty initializer list (extension)
+
+Complex declarations (full pipeline):
+- `int (*(*fp)(int))[10];` → pointer to function returning pointer to array of 10 ints
+- `void (*signal(int sig, void (*func)(int)))(int);` → signal function signature
+- `int (*fps[10])(void);` → array of 10 function pointers
+
+Re-run ALL previous tests (3.2 + 3.3). Must still pass.
 ```
 
-### Prompt 3.6 — GNU extension tolerance + AST printer
+### Prompt 3.5 — Statements, top-level parsing, error recovery
 
 ```
-Add GNU extension tolerance so the parser can handle preprocessed system header
-output, and implement an AST pretty-printer.
-
-MOTIVATION: After `#include <stdio.h>`, the preprocessed token stream contains
-GNU-specific syntax that the parser must handle. Without this, `forge check` on
-any file that includes a system header will fail. This is the parser equivalent
-of the predefined macros we added in Prompt 2.5.
+Implement statement parsing, translation-unit parsing, and error recovery.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 1 — __attribute__ handling
+SECTION 1 — Statement parsing
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-__attribute__((...)) can appear in MANY positions in declarations:
-  - After type specifiers: `int __attribute__((packed)) x;`
-  - After declarators: `int x __attribute__((aligned(16)));`
-  - On function declarations: `void f(void) __attribute__((noreturn));`
-  - On struct/union/enum: `struct __attribute__((packed)) S { ... };`
-  - On function parameters: `void f(int x __attribute__((unused)));`
+parse_statement() → Stmt
 
-Implementation — skip_gnu_attributes():
-  When you see the identifier `__attribute__` (or `__attribute`):
-  1. Expect `(`
-  2. Expect `(` (yes, double parens — `__attribute__((...))`
-  3. Count balanced parens, consuming everything until the matching `))`
-  4. Store the consumed attributes in the GnuAttribute list on DeclSpecifiers
-     (or discard them — for Phase 3, we just need to not choke on them)
-  5. Return
+Dispatch on current token:
 
-Call skip_gnu_attributes() at these points:
-  - In parse_declaration_specifiers() loop (when you see __attribute__)
-  - After parse_declarator() (attributes can follow the declarator)
-  - After the closing `)` of a function parameter list
-  - After struct/union/enum keyword
-  - After enum enumerators
+  `{` → parse_compound_statement()
+  `if` → parse_if_statement()
+  `while` → parse_while_statement()
+  `do` → parse_do_while_statement()
+  `for` → parse_for_statement()
+  `switch` → parse_switch_statement()
+  `case` → parse_case_statement()
+  `default` → parse_default_statement()
+  `return` → parse_return_statement()
+  `break` → Stmt::Break { span }, expect `;`
+  `continue` → Stmt::Continue { span }, expect `;`
+  `goto` → Stmt::Goto { label, span }, expect `;`
+  `;` → Stmt::Expr { expr: None, span }  (empty statement)
+
+  Identifier:
+    LABEL AMBIGUITY: check if next token is `:`
+    If peek() is Identifier AND peek_ahead(1) is Colon:
+      → consume identifier, consume `:`, parse_statement() for the body
+      → Stmt::Label { name, stmt, span }
+    Else:
+      → fall through to expression-statement
+
+  Otherwise → expression-statement: parse_expr(), expect `;`
+    → Stmt::Expr { expr: Some(expr), span }
+
+Compound statement:
+  `{` block-item* `}`
+  SCOPE: push_scope() after `{`, pop_scope() before `}`
+  parse_block_item():
+    _Static_assert → parse and emit as BlockItem::StaticAssert
+    is_start_of_declaration() → BlockItem::Declaration(parse_declaration())
+    else → BlockItem::Statement(parse_statement())
+
+If statement:
+  `if` `(` expr `)` stmt [`else` stmt]
+  Dangling else: naturally handled by recursive descent — `else` binds to
+  the innermost `if`.
+
+While:
+  `while` `(` expr `)` stmt
+
+Do-while:
+  `do` stmt `while` `(` expr `)` `;`
+
+For:
+  `for` `(`
+  SCOPE: push_scope() before parsing init (declarations in init are scoped to the for)
+
+  Init:
+    `;` → no init
+    is_start_of_declaration() → ForInit::Declaration(parse_declaration())
+      NOTE: parse_declaration() already consumes the `;`, so don't expect another
+    else → ForInit::Expr(parse_expr()), expect `;`
+
+  Condition:
+    `;` → no condition
+    else → parse_expr(), expect `;`
+
+  Update:
+    `)` → no update
+    else → parse_expr()  (NO semicolon here — `)` terminates)
+
+  Expect `)`
+  Body: parse_statement()
+  pop_scope() after body
+
+  IMPORTANT: Do NOT push a second scope inside parse_declaration() for the init.
+  The for-scope covers both the init-declaration and the body.
+
+Switch:
+  `switch` `(` expr `)` stmt
+
+Case:
+  `case` constant-expr `:` stmt
+
+Default:
+  `default` `:` stmt
+
+Return:
+  `return` [expr] `;`
+  If next token is `;` → no return value
+  Else → parse_expr(), expect `;`
+
+_Static_assert (at statement level):
+  `_Static_assert` `(` constant-expr [`,` string-literal] `)` `;`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — Top-level parsing
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+parse_translation_unit() → TranslationUnit
+
+Loop until EOF:
+  Skip any stray `;` at top level (with warning — but don't error)
+  parse_external_declaration()
+
+parse_external_declaration() → ExternalDeclaration:
+
+  _Static_assert → parse and wrap as Declaration (or add ExternalDeclaration::StaticAssert variant)
+
+  1. Parse declaration specifiers
+  2. If `;` → empty declaration (e.g., `struct foo;` at file scope)
+  3. Parse first declarator
+  4. FUNCTION DEFINITION vs DECLARATION:
+     - Look at the declarator: does it have a Function suffix?
+     - Look at the next token: is it `{`?
+     - If BOTH → FunctionDef:
+       Parse compound statement as body.
+       (Specifiers + declarator define the function signature)
+     - Otherwise → Declaration:
+       Parse rest of init-declarator-list (comma, more declarators, `=` init)
+       Expect `;`
+
+  5. After each declaration/function-def, check for typedef and update the set
+     (same logic as parse_declaration in 3.3).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — Error recovery
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When expect() fails or an unexpected token is encountered:
+1. Emit diagnostic with span and descriptive message
+2. Call synchronize()
+
+synchronize():
+  Skip tokens until one of:
+    `;` → consume it, return (end of statement)
+    `}` → do NOT consume (might close an enclosing block)
+    `{` → do NOT consume (might start a function body)
+    Token at start of line that looks like a new declaration
+      (type keyword, storage class, struct/union/enum) → do NOT consume
+    EOF → return
+
+  After synchronizing, the parser resumes from the next clean point.
+
+Error tracking:
+  Every diagnostic emitted sets has_errors = true.
+  The returned TranslationUnit may be incomplete (missing subtrees),
+  but it should not contain garbage — use Option or omit broken nodes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — Tests
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Functions:
+- `int main() { return 0; }` → FunctionDef
+- `int add(int a, int b) { return a + b; }` → params + body
+- `void f(void) {}` → void return, void params, empty body
+
+Statements:
+- `if (x) y();` → If without else
+- `if (x) y(); else z();` → If with else
+- `if (a) if (b) c(); else d();` → dangling else binds to inner if
+- `while (1) { break; }` → While + Break
+- `do { x++; } while (x < 10);` → DoWhile
+- `for (int i = 0; i < 10; i++) sum += i;` → For with decl init
+- `for (i = 0; i < 10; i++) {}` → For with expr init
+- `for (;;) break;` → infinite for, all parts empty
+- `switch (x) { case 1: a(); break; case 2: b(); break; default: c(); }` → Switch
+- `goto end; end: return;` → Goto + Label
+- `;` → empty statement
+- `{ int x = 1; int y = 2; }` → compound with 2 declarations
+
+Scoping:
+- `typedef int T; { T x; { typedef float T; T y; } T z; }`
+  → outer T=int, inner T=float, after inner block T=int again
+
+Top-level:
+- Multiple functions → Vec of FunctionDefs
+- Mix of declarations and functions
+- `extern int x;` at file scope → Declaration
+
+Error recovery:
+- `int x = ;` → error at `;`, recovers, continues
+- `int f() { int x = 5 int y = 6; }` → missing `;`, error, recovers
+- `int f() { @@@ } int g() { return 1; }` → garbage in f, but g parses ok
+- Multiple errors → all collected in diagnostics
+- No panics on any of these
+
+Re-run ALL previous tests (3.2 + 3.3 + 3.4). Must still pass.
+```
+
+### Prompt 3.6 — GNU extension tolerance + AST printer + driver integration
+
+```
+Add full GNU extension tolerance, implement the AST pretty-printer, and wire
+the parser into the Forge driver.
+
+MOTIVATION: System headers use GNU extensions everywhere. Without handling them,
+`forge check` or `forge parse` on any file that includes a system header fails.
+This is the parser's "boss fight" — the equivalent of predefined macros in Phase 2.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — __attribute__((...)) handling
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+skip_gnu_attributes():
+  When you see identifier `__attribute__` or `__attribute`:
+  1. Expect `(`, Expect `(` (double parens: `__attribute__((...))`)
+  2. Count balanced parens. Consume EVERYTHING until `))`
+     (the inner contents can be arbitrarily complex — identifiers, strings,
+      numbers, commas, nested parens, etc.)
+  3. Return (optionally store in GnuAttribute list, but OK to discard for Phase 3)
+
+Call sites — skip_gnu_attributes() must be called at ALL of these positions:
+  ☐ In parse_declaration_specifiers() loop, when token is __attribute__
+  ☐ After parse_declarator() completes (attributes on the declarator)
+  ☐ After `)` closing a function parameter list
+  ☐ Before `{` of struct/union body (attributes on struct)
+  ☐ After `}` of struct/union body
+  ☐ Before `{` of enum body
+  ☐ After each enumerator (before `,` or `}`)
+  ☐ On struct members, after the declarator
+  ☐ On function parameters, after the declarator
+
+If you miss ANY of these positions, a system header will trigger a parse error.
+When in doubt, add an extra check: after consuming any declarator or specifier
+sequence, peek for __attribute__ and skip it.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 2 — Other GNU extensions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 __extension__:
-  When seen, simply consume it and continue parsing the next declaration/expression.
-  It's a GCC directive meaning "suppress warnings for the following extension."
-  Treat as a no-op prefix.
+  Wherever it appears (before a declaration, before an expression, before a
+  statement), consume it and continue parsing. It's a no-op semantically.
+  It can appear in:
+  - Top level: `__extension__ typedef ...`
+  - Expression: `__extension__ (expr)`
+  - In parse_prefix() of the expression parser, handle it as: consume, then
+    return parse_pratt(current_bp)
 
-__restrict, __restrict__:
-  Treat as equivalent to `restrict` (TypeQualifier::Restrict).
-
-__inline, __inline__:
-  Treat as equivalent to `inline` (FunctionSpecifier::Inline).
-
-__volatile, __volatile__:
-  Treat as equivalent to `volatile` (TypeQualifier::Volatile).
-
-__const, __const__:
-  Treat as equivalent to `const` (TypeQualifier::Const).
-
-__signed, __signed__:
-  Treat as equivalent to `signed` (TypeSpecifierToken::Signed).
-
-__typeof__(expr) and __typeof(expr):
-  Parse the expression inside parens, produce TypeSpecifierToken::TypeofExpr.
-  Also handle `typeof(type-name)` form → TypeSpecifierToken::TypeofType.
+__typeof__(expr) and __typeof(expr) and typeof(expr):
+  Already handled as TypeSpecifierToken::TypeofExpr/TypeofType in 3.3.
+  Verify it works.
 
 __builtin_va_list:
-  Treat as a typedef name. Add it to the initial typedef set during parser setup
-  (alongside any other compiler builtin types).
+  Should already be in the initial typedef set (from 3.2 Parser constructor).
+  Verify it works: `__builtin_va_list ap;` should parse as a declaration.
 
-__asm__ or asm at declaration level:
-  After a function declarator, `__asm__("symbol_name")` specifies the assembly
-  name. Consume the balanced parens and discard.
-  Also handle `__asm__` in struct members (bitfield assembly names).
+__asm__ / asm / __asm:
+  Can appear after a function declarator: `int foo(void) __asm__("_foo");`
+  Can appear after a variable declarator: `int x __asm__("my_x");`
+  Implementation: after parse_declarator(), check for __asm__/__asm/asm.
+  If found: consume balanced parens and discard. Continue parsing.
+
+  Also handle asm at statement level (GCC inline asm):
+  `__asm__("nop");` or `asm volatile("..." : : : "memory");`
+  For now: detect `asm`/`__asm__`/`__asm` at statement level, consume all
+  balanced parens and the closing `;`, emit Stmt::Expr(None) or a new
+  Stmt::GnuAsm variant (up to you — both work, sema doesn't need it yet).
 
 __builtin_offsetof(type, member):
-  Parse as a function-call-like expression. The parser doesn't need to understand
-  it semantically — just parse the balanced parens.
+  Appears as an expression. When parse_prefix() sees `__builtin_offsetof`:
+  Consume `(`, parse type-name, consume `,`, parse member expression
+  (can be `member.field` or `member[idx]`), consume `)`.
+  Return a synthetic Expr (e.g., Expr::IntLiteral(0) as placeholder, or
+  add an Expr::BuiltinOffsetof variant if you prefer).
+
+__builtin_types_compatible_p(type1, type2):
+  Similar to offsetof: consume `(`, parse two type-names separated by `,`,
+  consume `)`. Return a placeholder expression.
+
+Other __builtin_* functions:
+  These typically look like function calls: `__builtin_expect(expr, val)`.
+  The expression parser already handles function calls, so these work
+  automatically — `__builtin_expect` parses as Ident, then `(...)` parses as
+  FunctionCall. No special handling needed.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 3 — AST pretty-printer
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Implement a tree-style AST dump for debugging and testing.
+Create forge_parser/src/printer.rs:
+  pub fn print_ast(tu: &TranslationUnit) -> String
 
-Create forge_parser/src/printer.rs with:
-  pub fn print_ast(unit: &TranslationUnit) -> String
+Output format — indented tree with 2-space indent:
 
-Output format (indented tree):
-```
 TranslationUnit
   FunctionDef "main" → [Int]
     Params: (void)
-    CompoundStmt
-      ReturnStmt
-        IntLiteral 0
-```
+    Body:
+      CompoundStmt
+        Return
+          IntLiteral 0
 
-This should show:
-- Type specifiers as a list: `[Unsigned, Long, Long]`
-- Declarator structure: pointer levels, array sizes, function params
-- Expression trees with operator names
-- Indentation for nesting depth
+  Declaration [Unsigned, Long, Long] "x"
+    Initializer: IntLiteral 42
 
-Implement Display for the main AST types, or a dedicated Printer struct with
-an indent level.
+  StructDef "Point"
+    Field [Int] "x"
+    Field [Int] "y"
+
+Show:
+- Type specifiers as list: [Unsigned, Long, Long]
+- Pointer levels: *const *
+- Array sizes: [10], [], [*]
+- Function params: (int a, char *b, ...)
+- Expression trees with operator names: BinaryOp(Add, IntLiteral(1), IntLiteral(2))
+- Designated initializers: .field = ..., [0] = ...
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 4 — Tests
+SECTION 4 — Driver integration
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-A. GNU attribute tests:
-   - `int x __attribute__((aligned(16)));` → parses, attribute stored or skipped
+Update forge_driver:
+1. After preprocessing, feed token stream to parser
+2. `forge check file.c` → lex + preprocess + parse, report all diagnostics
+3. Add `forge parse file.c` subcommand → dumps AST tree (from printer)
+4. `forge -E` unchanged (preprocess only)
+
+Diagnostics from all phases (lexer, preprocessor, parser) are combined and
+reported together.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — Tests
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A. GNU __attribute__:
+   - `int x __attribute__((aligned(16)));` → parses
    - `void f(void) __attribute__((noreturn));` → parses
    - `struct __attribute__((packed)) S { int x; };` → parses
    - `__attribute__((visibility("default"))) int x;` → parses
+   - `void f(int x __attribute__((unused)));` → parses (param attribute)
+   - `enum E { A __attribute__((deprecated)), B };` → parses (enumerator attribute)
+   - `int * __attribute__((aligned(8))) p;` → attribute on pointer level
 
-B. GNU keyword tests:
+B. GNU keywords:
    - `__inline__ int f(void) { return 0; }` → FunctionSpecifier::Inline
-   - `int __const x = 5;` → TypeQualifier::Const
    - `int * __restrict p;` → TypeQualifier::Restrict
-   - `__extension__ typedef ...` → skips __extension__, parses typedef
+   - `__extension__ typedef int __int128_t;` → typedef parsed
 
-C. __typeof__ tests:
-   - `__typeof__(x) y;` → TypeofExpr
+C. __typeof__:
+   - `__typeof__(1 + 2) x;` → TypeofExpr
    - `__typeof__(int *) p;` → TypeofType
 
-D. __asm__ tests:
-   - `extern int foo __asm__("_foo");` → skips asm, parses declaration
+D. __asm__:
+   - `extern int foo __asm__("_foo");` → declaration parses
+   - `__asm__("nop");` as a statement → parses (emits Stmt or skips)
 
-E. System header smoke test (THE BIG TEST):
-   - Take the preprocessed output of `#include <stdio.h>` (from Phase 2)
-   - Feed it to the parser
-   - Assert: zero parse errors
-   - This may require iterative fixing — some constructs in system headers
-     may not be covered above. Common additions needed:
-     - `__builtin_va_list` as a built-in typedef
-     - `__attribute__` in unexpected positions
-     - `_Pragma` tokens (should already be handled by preprocessor)
+E. __builtin_*:
+   - `__builtin_va_list ap;` → declaration (va_list is typedef)
+   - `__builtin_offsetof(struct S, field)` → parses as expression
+   - `__builtin_expect(x, 0)` → parses as function call (automatic)
 
-F. AST printer:
-   - Parse `int main() { return 0; }` and verify the printed tree
+F. SYSTEM HEADER SMOKE TEST (THE BIG TEST):
+   Create a test file:
+   ```c
+   #include <stdio.h>
+   #include <stdlib.h>
+   #include <string.h>
+   #include <stdint.h>
+   int main(void) { return 0; }
+   ```
+   Pipeline: lex → preprocess → parse.
+   Assert: ZERO parse errors.
+
+   If this fails, the error messages will tell you which construct is unhandled.
+   Common fixes needed:
+   - __attribute__ in a position you missed → add skip_gnu_attributes() call
+   - __asm__ after a declarator you didn't handle → add __asm__ skip
+   - Unknown __builtin_* → usually parses as function call automatically
+   - Inline asm at unexpected position → add statement-level asm handling
+
+   ITERATE until it passes. This is the most important single test.
+
+G. AST printer:
+   - Parse `int main() { return 0; }`, verify printed tree looks correct.
+   - Parse struct, enum, function with params, verify output.
 
 Run cargo test --all, cargo clippy, cargo fmt.
 ```
 
-### Prompt 3.7 — Integration, driver wiring, and validation
+### Prompt 3.7 — Full validation
 
 ```
-Integrate the parser into the Forge driver and run comprehensive validation.
+Run comprehensive validation of forge_parser before moving to Phase 4.
+Same pattern as Phase 2.8 — code audit, completeness, stress, real-world, performance.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 1 — Driver integration
+PART 1 — Code Audit
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Update forge_driver:
-1. After preprocessing, feed the token stream to the parser
-2. `forge check file.c` now lexes → preprocesses → parses, reports all diagnostics
-3. Add `forge parse file.c` subcommand that outputs the AST dump (from the printer)
-4. `forge -E` still works as before (preprocess only, no parse)
+A. unwrap()/expect() audit:
+   List ALL in forge_parser. Replace with error handling or justify with comment.
+   The parser must NEVER panic on any input.
 
-Propagate parser diagnostics to the main diagnostic output alongside
-preprocessor diagnostics.
+B. TODO/FIXME audit:
+   Resolve or document in KNOWN_ISSUES.md.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 2 — Lit tests
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+C. Clippy pedantic:
+   cargo clippy --all-targets --all-features -- -D warnings -W clippy::pedantic
+   Fix or suppress-with-justification.
 
-Create test files in tests/lit/parser/:
-
-tests/lit/parser/declarations.c — all declaration forms:
-  Variables, pointers, arrays, function declarations, typedef, extern, static
-
-tests/lit/parser/expressions.c — expression precedence and forms:
-  Arithmetic, comparison, logical, bitwise, ternary, assignment, function call,
-  array subscript, member access, cast, sizeof, compound literal
-
-tests/lit/parser/statements.c — all statement types:
-  if, while, for, switch, goto, return, break, continue, labeled, compound
-
-tests/lit/parser/structs.c — struct/union/enum:
-  Definition, forward declaration, bit-fields, nested structs, anonymous
-
-tests/lit/parser/initializers.c — initializer lists:
-  Simple, designated (field and array), nested
-
-tests/lit/parser/complex.c — a complete 50-line C program using most features
-
-tests/lit/parser/errors.c — syntax errors with expected error messages:
-  // ERROR: expected ';'  
-  // ERROR: unexpected token
+D. Dead code check:
+   Unused pub functions? AST variants with no test coverage?
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 3 — Completeness matrix
+PART 2 — Completeness Matrix
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Verify a test exists and passes for each:
+For EVERY feature, verify test exists AND passes. Write any missing tests.
 
 DECLARATIONS:
-| Feature                                    | Test? | Pass? |
-|--------------------------------------------|-------|-------|
-| int x;                                     |       |       |
-| int x = 5;                                 |       |       |
-| int x, y, *z;                              |       |       |
-| unsigned long long x;                      |       |       |
-| const int *p;                              |       |       |
-| int *const p;                              |       |       |
-| typedef int MyInt;                         |       |       |
-| MyInt x; (typedef usage)                   |       |       |
-| static int x;                              |       |       |
-| extern int x;                              |       |       |
-| int arr[10];                               |       |       |
-| int arr[];                                 |       |       |
-| int f(int a, char *b);                     |       |       |
-| int f(void);                               |       |       |
-| int f(int, ...);                           |       |       |
-| int (*fp)(int);                            |       |       |
-| int (*(*fp)(int))[10];                     |       |       |
-| struct Point { int x; int y; };            |       |       |
-| struct Point p;                            |       |       |
-| struct { int x; } anon;                    |       |       |
-| union { int i; float f; };                 |       |       |
-| enum Color { RED, GREEN, BLUE };           |       |       |
-| Bit-fields                                 |       |       |
-| _Static_assert(...)                        |       |       |
-| _Alignas(16) int x;                       |       |       |
+| Feature                                  | Test? | Pass? |
+|------------------------------------------|-------|-------|
+| int x;                                   |       |       |
+| int x = 5;                               |       |       |
+| int x, y, *z;                            |       |       |
+| unsigned long long x;                    |       |       |
+| long unsigned int long x; (any order)    |       |       |
+| const int *p;                            |       |       |
+| int *const p;                            |       |       |
+| int *const *volatile p;                  |       |       |
+| typedef int MyInt;                       |       |       |
+| MyInt x; (typedef resolves)              |       |       |
+| typedef int T; T * x; (not multiply)    |       |       |
+| typedef int T; { T T; } (edge case)     |       |       |
+| static int x;                            |       |       |
+| extern int x;                            |       |       |
+| _Thread_local int x;                     |       |       |
+| int arr[10];                             |       |       |
+| int arr[];                               |       |       |
+| int arr[n]; (VLA)                        |       |       |
+| int f(int a, char *b);                   |       |       |
+| int f(void);                             |       |       |
+| int f(int, ...);                         |       |       |
+| int (*fp)(int);                          |       |       |
+| int (*(*fp)(int))[10];                   |       |       |
+| int (*fps[10])(void);                    |       |       |
+| struct Point { int x; int y; };          |       |       |
+| struct Point p; (use after def)          |       |       |
+| struct { int x; } anon;                  |       |       |
+| union { int i; float f; };              |       |       |
+| struct with anonymous union member (C11) |       |       |
+| struct with flexible array member        |       |       |
+| struct with _Static_assert member        |       |       |
+| struct with bit-fields                   |       |       |
+| Anonymous bit-field (int : 5;)           |       |       |
+| enum Color { RED, GREEN, BLUE };         |       |       |
+| enum with explicit values                |       |       |
+| enum with trailing comma                 |       |       |
+| _Static_assert(...)                      |       |       |
+| _Alignas(16) int x;                     |       |       |
+| _Alignas(int) char c;                   |       |       |
+| _Atomic int x;                          |       |       |
+| _Atomic(int) x;                         |       |       |
 
 EXPRESSIONS:
-| Feature                                    | Test? | Pass? |
-|--------------------------------------------|-------|-------|
-| Arithmetic precedence (+ * mixing)          |       |       |
-| All binary operators                       |       |       |
-| All unary operators                        |       |       |
-| Ternary (right-assoc)                      |       |       |
-| Assignment (right-assoc)                   |       |       |
-| Function call                              |       |       |
-| Array subscript                            |       |       |
-| Member access (. and ->)                   |       |       |
-| Post-increment/decrement                   |       |       |
-| Cast expression                            |       |       |
-| sizeof(expr) and sizeof(type)              |       |       |
-| Compound literal                           |       |       |
-| _Generic selection                         |       |       |
-| String literal concatenation               |       |       |
-| Comma expression                           |       |       |
+| Feature                                  | Test? | Pass? |
+|------------------------------------------|-------|-------|
+| Arithmetic precedence correct            |       |       |
+| All 17 binary operators                  |       |       |
+| All 8 unary operators                    |       |       |
+| All 11 assignment operators              |       |       |
+| Ternary ? : (right-associative)          |       |       |
+| Assignment (right-associative)           |       |       |
+| Left-associative (a - b - c)             |       |       |
+| Function call with 0, 1, N args          |       |       |
+| Nested function calls f(g(x))            |       |       |
+| Array subscript a[i]                     |       |       |
+| Chained postfix a[0].b->c               |       |       |
+| Post-increment/decrement                |       |       |
+| Pre-increment/decrement                 |       |       |
+| Cast (int)x                              |       |       |
+| Cast (int *)(void *)p                   |       |       |
+| sizeof(expr)                             |       |       |
+| sizeof(type)                             |       |       |
+| sizeof a (no parens)                     |       |       |
+| _Alignof(type)                           |       |       |
+| Compound literal (int){42}              |       |       |
+| Compound literal (int[]){1,2,3}         |       |       |
+| _Generic selection                       |       |       |
+| String concatenation "a" "b"            |       |       |
+| Comma expression a, b, c               |       |       |
+| Complex: *p++ = f(a + b, c)            |       |       |
 
 STATEMENTS:
-| Feature                                    | Test? | Pass? |
-|--------------------------------------------|-------|-------|
-| Compound statement (block)                 |       |       |
-| if / else                                  |       |       |
-| while                                      |       |       |
-| do-while                                   |       |       |
-| for (expr init)                            |       |       |
-| for (decl init)                            |       |       |
-| switch / case / default                    |       |       |
-| goto / label                               |       |       |
-| return with and without value              |       |       |
-| break / continue                           |       |       |
-| Empty statement                            |       |       |
+| Feature                                  | Test? | Pass? |
+|------------------------------------------|-------|-------|
+| Compound statement                       |       |       |
+| if without else                          |       |       |
+| if with else                             |       |       |
+| Dangling else (nested if)                |       |       |
+| while                                    |       |       |
+| do-while                                 |       |       |
+| for with expr init                       |       |       |
+| for with decl init                       |       |       |
+| for(;;) (infinite)                       |       |       |
+| switch / case / default                  |       |       |
+| Multiple case labels                     |       |       |
+| goto / label                             |       |       |
+| return with value                        |       |       |
+| return without value                     |       |       |
+| break / continue                         |       |       |
+| Empty statement ;                        |       |       |
+| _Static_assert at block scope            |       |       |
+| Nested blocks with typedef scoping       |       |       |
 
 GNU EXTENSIONS:
-| Feature                                    | Test? | Pass? |
-|--------------------------------------------|-------|-------|
-| __attribute__((...))                        |       |       |
-| __extension__                               |       |       |
-| __restrict / __inline / __volatile__        |       |       |
-| __typeof__(expr)                            |       |       |
-| __asm__(...)                                |       |       |
-| __builtin_va_list                           |       |       |
-| Preprocessed stdio.h parses without errors |       |       |
+| Feature                                  | Test? | Pass? |
+|------------------------------------------|-------|-------|
+| __attribute__((...)) on declaration      |       |       |
+| __attribute__ on declarator              |       |       |
+| __attribute__ on function params         |       |       |
+| __attribute__ on struct/enum             |       |       |
+| __attribute__ on enumerators             |       |       |
+| __extension__                             |       |       |
+| __restrict / __inline__ / __volatile__   |       |       |
+| __signed__                                |       |       |
+| __const / __const__                       |       |       |
+| __typeof__(expr)                          |       |       |
+| __typeof__(type)                          |       |       |
+| __asm__(...) on declaration              |       |       |
+| __asm__ as statement                      |       |       |
+| __builtin_va_list                         |       |       |
+| __builtin_offsetof                        |       |       |
+| __builtin_* as function calls            |       |       |
+| Preprocessed stdio.h parses              |       |       |
+| Preprocessed stdlib.h parses             |       |       |
+| Preprocessed string.h parses             |       |       |
 
 ERROR RECOVERY:
-| Feature                                    | Test? | Pass? |
-|--------------------------------------------|-------|-------|
-| Missing semicolon → recovers               |       |       |
-| Unexpected token → skips to next stmt       |       |       |
-| Error in one function → next function ok    |       |       |
-| Multiple errors collected                  |       |       |
+| Feature                                  | Test? | Pass? |
+|------------------------------------------|-------|-------|
+| Missing semicolon → recovers             |       |       |
+| Unexpected token → skips to next stmt    |       |       |
+| Error in function → next function ok     |       |       |
+| Multiple errors collected                |       |       |
+| Error in expression → recovers           |       |       |
+| Garbage tokens → no panic               |       |       |
+
+DRIVER:
+| Feature                                  | Test? | Pass? |
+|------------------------------------------|-------|-------|
+| forge check file.c (lex+pp+parse)        |       |       |
+| forge parse file.c (AST dump)            |       |       |
+| forge -E still works                     |       |       |
+| Parser diagnostics propagated            |       |       |
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 4 — Edge case stress tests
+PART 3 — Edge Case Stress Tests
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Write these as tests (no panics!):
-1. Empty file → empty TranslationUnit
+Write as tests. No panics, no infinite loops.
+
+1. Empty file → empty TranslationUnit, no errors
 2. File with only comments → empty TranslationUnit
-3. 50 nested blocks: `{ { { ... } } }` → parses without stack overflow
-4. Very long expression: `a+a+a+...+a` (100 terms) → parses
-5. Struct with 100 members
-6. Function with 50 parameters
-7. 20 levels of pointer indirection: `int **...*x;`
-8. Deeply nested initializer: `{{{{{1}}}}}` (5 levels)
-9. Declaration vs expression ambiguity: typedef then use in various contexts
-10. Empty function body: `void f() {}`
+3. 50 nested blocks: { { { ... } } } → parses without stack overflow
+4. Long expression: a+a+a+...+a (200 terms) → parses
+5. Struct with 100 members → parses
+6. Function with 50 parameters → parses
+7. 20 pointer levels: int **...*x; → parses
+8. Nested initializer 10 levels deep: {{{{{{{{{{1}}}}}}}}}} → parses
+9. 100 chained function calls: f(g(h(i(j(... → parses or gives clean error
+10. Typedef shadowing: typedef int T; { typedef float T; { typedef char T; T x; } }
+11. Empty function body: void f() {} → parses
+12. Declaration with 20 init-declarators: int a,b,c,d,...; → parses
+13. Complex declarator: void (*(*(*fp)(int,int))(double))(char) → parses
+14. Every assignment operator in one function → all parse
+15. _Generic with 10 type associations → parses
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 5 — Real-world parse test
+PART 4 — Real-World Parse Test
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Create a test C file (tests/lit/parser/mini_program.c) that exercises most features:
+Test file (tests/lit/parser/mini_program.c):
 
 ```c
 #include <stdio.h>
@@ -1334,7 +1825,7 @@ static int add(int a, int b) {
 int (*get_op(char op))(int, int) {
     switch (op) {
     case '+': return add;
-    default:  return NULL;
+    default:  return (void *)0;
     }
 }
 
@@ -1342,76 +1833,118 @@ int main(int argc, char *argv[]) {
     struct Point p = { .x = 1, .y = 2 };
     int arr[] = {1, 2, 3, 4, 5};
     size_t_alias n = sizeof(arr) / sizeof(arr[0]);
-    
+
     for (int i = 0; i < (int)n; i++) {
         if (arr[i] > 3) {
             printf("big: %d\n", arr[i]);
         }
     }
-    
+
     int (*op)(int, int) = get_op('+');
     int result = op ? op(p.x, p.y) : -1;
-    return result == 3 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return result == 3 ? 0 : 1;
 }
 ```
 
-Feed this through: lex → preprocess → parse. Assert zero errors.
-If it fails, fix the parser and re-run.
+Feed through: lex → preprocess → parse. Assert zero errors.
+
+System header parse test:
+For each: create temp file with only the include, lex+preprocess+parse, assert 0 errors.
+- #include <stddef.h>
+- #include <stdint.h>
+- #include <limits.h>
+- #include <stdio.h>
+- #include <stdlib.h>
+- #include <string.h>
+- #include <errno.h>
+- #include <ctype.h>
+- #include <assert.h>
+- #include <math.h>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 6 — Final verification
+PART 5 — Performance
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Run:
-  cargo test --all → all tests pass (Phase 0-3 combined)
+Measure time for full pipeline (lex + preprocess + parse):
+
+Test A: File with #include <stdio.h> + simple main()
+  Target: < 200ms debug, < 50ms release
+
+Test B: 10 system headers combined + 50-line program
+  Target: < 300ms debug, < 80ms release
+
+Report token count → AST node count ratio.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 6 — Final Report
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Code audit results (unwrap count, TODO count, clippy results)
+2. Filled completeness matrix
+3. Stress test results (all 15)
+4. Real-world parse results (mini_program + system headers)
+5. Performance numbers
+6. Verdict: ready for Phase 4?
+
+Final run:
+  cargo test --all → all pass (Phase 0-3 combined)
   cargo clippy --all-targets --all-features -- -D warnings → clean
   cargo fmt --all -- --check → clean
 
-Report total test count and verdict: is forge_parser ready for Phase 4?
+Report total test count.
 ```
 
 ---
 
 ## Pitfalls & Debugging Tips
 
-### "typedef int T; T * x;" must parse as a pointer declaration, not multiplication
-This is the single most important test case. If your typedef tracking is broken, 
-ALL code using typedef types will be misparsed. Test this early and test it often.
+### "typedef int T; T * x;" — the #1 test case
+If this parses as multiplication, typedef tracking is broken and ALL real code
+will be misparsed. Test this before anything else in every prompt.
 
-### "Declarators are read from inside out"
-`int (*fp)(int)` → fp is a: pointer to → function taking int → returning int.
-The `(*fp)` part is the declarator (pointer + name), and `(int)` is a function suffix.
-Parse the innermost part first (via parenthesized declarator), then the suffixes.
+### "Declarators are inside-out, left-right"
+`int (*fp)(int)` reads: fp is a (pointer to (function taking int returning int)).
+Parse: `*` → pointer, `fp` → name, `(int)` → function suffix. The parenthesized
+grouping `(*fp)` ensures the pointer binds to fp, not to the return type.
 
-### "Specifier order doesn't matter"
-`long unsigned int` and `unsigned int long` are the same type in C.
-Collect specifiers in a Vec and resolve the combination in sema (Phase 4).
+### "Specifier order doesn't matter in C"
+`long unsigned int` = `unsigned int long` = `int long unsigned` = `unsigned long`.
+Collect as Vec, resolve in sema. Don't try to normalize during parsing.
 
-### "Cast ambiguity requires typedef tracking"
-`(x)(y)` is a function call if x is a variable, but a cast if x is a typedef.
-Without the typedef table, the parser cannot decide. This is why typedef tracking
-must work perfectly before expression parsing is complete.
+### "Cast ambiguity requires the typedef table"
+`(x)(y)` — function call if x is a variable, cast if x is a typedef.
+Without the typedef table, the parser literally cannot decide. This is THE
+reason typedef tracking must be flawless.
 
-### "__attribute__ can appear almost anywhere"
-System headers put `__attribute__((visibility("default")))` before declarations,
-after declarators, on function parameters, on struct fields, after enum values.
-The safest approach: whenever you see `__attribute__`, call skip_gnu_attributes()
-regardless of context.
+### "__attribute__ appears in MORE places than you think"
+System headers put `__attribute__((visibility("default")))`:
+  - Before declarations
+  - After declarators
+  - On function parameters
+  - On struct fields
+  - After enum values
+  - After function parameter lists
+  - On pointer levels (between `*` and identifier)
+When in doubt: if you see `__attribute__`, skip it.
 
-### "Error recovery is about finding the next good starting point"
-Don't try to understand what went wrong — just find the next `;` or `}` or 
-type keyword at start of line, and restart parsing from there.
+### "Error recovery = find the next safe starting point"
+Don't try to understand what went wrong. Skip to `;`, `}`, or a type keyword
+at the start of a line. Then resume parsing normally.
+
+### "for(int i=0;...) scope"
+The declaration `int i` is scoped to the entire for statement (init + body).
+Push scope BEFORE parsing init, pop AFTER body. Do NOT let parse_declaration()
+push an additional scope — that would double-scope and lose the variable.
 
 ---
 
 ## Notes
 
-- **Don't do type checking here.** `unsigned float x;` is grammatically valid — the parser
-  accepts it, sema (Phase 4) rejects it.
-- **Don't resolve types.** `[Unsigned, Long, Long]` stays as a Vec in the AST. Sema resolves it
-  to a concrete type.
-- **Don't evaluate constant expressions.** `int arr[2+3]` stores `Add(2, 3)` as the size,
-  not `5`. Sema evaluates it.
-- **K&R-style function definitions are NOT supported.** (`int f(x) int x; { ... }`)
-  They've been deprecated since C89.
-- **GNU statement expressions (`({...})`) are out of scope.** If encountered, emit a diagnostic.
+- **Parser does NOT type-check.** `unsigned float x;` is grammatically parseable — the parser
+  accepts it, sema (Phase 4) rejects it with "cannot combine 'unsigned' with 'float'".
+- **Parser does NOT resolve types.** `[Unsigned, Long, Long]` stays as a Vec in the AST.
+- **Parser does NOT evaluate expressions.** `int arr[2+3]` stores `BinaryOp(Add, 2, 3)` as
+  the array size, not `5`.
+- **K&R function definitions NOT supported.** `int f(x) int x; { }` — deprecated since C89.
+  If detected, emit an error diagnostic.
+- **GNU statement expressions `({...})` NOT supported.** Emit error if encountered.

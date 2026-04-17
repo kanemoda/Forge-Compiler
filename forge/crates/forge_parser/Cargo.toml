@@ -1,0 +1,10 @@
+[package]
+name = "forge_parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+forge_lexer = { path = "../forge_lexer" }
+forge_diagnostics = { path = "../forge_diagnostics" }

@@ -28,8 +28,9 @@
 //!
 //! ```text
 //! forge [flags] FILE                # gcc-style: default mode is a full build
-//! forge -E   [flags] FILE           # preprocess only, write to stdout
-//! forge check [flags] FILE          # lex + preprocess, dump token stream
+//! forge -E    [flags] FILE          # preprocess only, write to stdout
+//! forge check [flags] FILE          # lex + preprocess + parse, dump token stream
+//! forge parse [flags] FILE          # lex + preprocess + parse, dump the AST
 //! forge build [flags] FILE -o OUT   # explicit build subcommand
 //! ```
 //!
@@ -48,8 +49,8 @@ use std::process;
 use clap::{ArgAction, Parser, Subcommand};
 use forge_diagnostics::render_diagnostics;
 use forge_driver::{
-    compile, format_token, parse_cli_define, tokens_to_source, CliDefine, CompileOptions,
-    CompileOutput, TargetArch, TokenKind,
+    compile, format_token, parse_cli_define, print_ast, tokens_to_source, CliDefine,
+    CompileOptions, CompileOutput, CompileStage, TargetArch, TokenKind,
 };
 
 /// The Forge C17 compiler.
@@ -99,8 +100,8 @@ struct Cli {
 enum Command {
     /// Compile a C source file to a native executable.
     ///
-    /// The backend is not yet wired up, so `build` today runs exactly
-    /// the same pipeline as `check` (lex + preprocess) and writes
+    /// The backend is not yet wired up, so `build` today runs the same
+    /// pipeline as `check` (lex + preprocess + parse) and writes
     /// nothing to the output path.  The `-o` argument is accepted for
     /// forward compatibility.
     Build {
@@ -115,12 +116,25 @@ enum Command {
 
     /// Check a C source file for errors without producing an executable.
     ///
-    /// `check` runs the full lex + preprocess pipeline, prints every
-    /// post-preprocessor token to stdout in `KIND span=START..END 'text'`
-    /// form, and finishes with a `preprocessing successful, N tokens`
-    /// summary line so test harnesses can assert on the token count.
+    /// `check` runs the full lex + preprocess + parse pipeline, prints
+    /// every post-preprocessor token to stdout in
+    /// `KIND span=START..END 'text'` form, and finishes with a
+    /// `preprocessing successful, N tokens` summary line so test
+    /// harnesses can assert on the token count.
     Check {
         /// The C source file to check.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
+
+    /// Parse a C source file and dump the resulting AST.
+    ///
+    /// `parse` runs the full lex + preprocess + parse pipeline and
+    /// writes a human-readable indented tree of the AST to stdout.
+    /// The output format is for debugging and is **not** a stable
+    /// contract — use with the understanding that it may change.
+    Parse {
+        /// The C source file to parse.
         #[arg(value_name = "FILE")]
         file: PathBuf,
     },
@@ -132,10 +146,12 @@ enum Command {
 enum Mode {
     /// `-E`: write reconstructed preprocessed source to stdout.
     Preprocess,
-    /// `check`: lex + preprocess, emit the token stream.
+    /// `check`: lex + preprocess + parse, emit the token stream.
     Check,
+    /// `parse`: lex + preprocess + parse, dump the AST tree.
+    Parse,
     /// `build` (or default when a file is given with no `-E`): full
-    /// pipeline — currently no-op past the preprocessor.
+    /// pipeline — currently no-op past the parser.
     Build,
 }
 
@@ -161,11 +177,20 @@ fn main() {
         }
     }
 
+    // `-E` stops at the preprocessor so parser diagnostics do not fire
+    // on preprocessor-only probes; every other mode runs the full
+    // front-end so `check` / `parse` / `build` all see parse errors.
+    let stage = match mode {
+        Mode::Preprocess => CompileStage::Preprocess,
+        Mode::Check | Mode::Parse | Mode::Build => CompileStage::Parse,
+    };
+
     let options = CompileOptions {
         include_paths: cli.include_paths.clone(),
         defines,
         undefines: cli.undefines.clone(),
         target_arch: TargetArch::default(),
+        stage,
     };
 
     run_compile(&file, mode, &options, build_output.as_deref());
@@ -177,6 +202,7 @@ fn main() {
 /// * `forge FILE`                → `(FILE, Build, None)`
 /// * `forge -E FILE`             → `(FILE, Preprocess, None)`
 /// * `forge check FILE`          → `(FILE, Check, None)`
+/// * `forge parse FILE`          → `(FILE, Parse, None)`
 /// * `forge build FILE -o OUT`   → `(FILE, Build, Some(OUT))`
 ///
 /// Conflicts (e.g., both a top-level file and a subcommand) produce a
@@ -186,16 +212,21 @@ fn resolve_invocation(cli: &Cli) -> Result<(PathBuf, Mode, Option<PathBuf>), Str
         (Some(Command::Build { file, output }), None, false) => {
             Ok((file.clone(), Mode::Build, Some(output.clone())))
         }
-        (Some(Command::Build { file, .. } | Command::Check { file }), None, true)
+        (
+            Some(Command::Build { file, .. } | Command::Check { file } | Command::Parse { file }),
+            None,
+            true,
+        )
         | (None, Some(file), true) => Ok((file.clone(), Mode::Preprocess, None)),
         (Some(Command::Check { file }), None, false) => Ok((file.clone(), Mode::Check, None)),
+        (Some(Command::Parse { file }), None, false) => Ok((file.clone(), Mode::Parse, None)),
         (None, Some(file), false) => Ok((file.clone(), Mode::Build, None)),
         (Some(_), Some(_), _) => Err("cannot combine a positional FILE with a subcommand; \
              put FILE inside the subcommand or drop the subcommand"
             .to_string()),
         (None, None, _) => Err(
             "no input file\n\nUsage: forge [-E] [-I DIR]... [-D MACRO]... [-U MACRO]... FILE\n   \
-             or: forge check FILE\n   or: forge build FILE [-o OUT]"
+             or: forge check FILE\n   or: forge parse FILE\n   or: forge build FILE [-o OUT]"
                 .to_string(),
         ),
     }
@@ -210,9 +241,14 @@ fn resolve_invocation(cli: &Cli) -> Result<(PathBuf, Mode, Option<PathBuf>), Str
 ///   stdout via [`tokens_to_source`].
 /// * `Check` mode prints every token to stdout via [`format_token`] and
 ///   finishes with a summary line the lit test harness can match on.
-/// * `Build` mode currently only runs lex + preprocess — the later
-///   pipeline stages are not yet wired in — and writes nothing to the
-///   output path.
+///   The parser runs after preprocessing — its diagnostics are merged
+///   into `output.diagnostics` by the driver and rendered to stderr
+///   above, but the AST itself is discarded.
+/// * `Parse` mode prints the AST tree via [`print_ast`] after the full
+///   lex + preprocess + parse pipeline has run.
+/// * `Build` mode runs lex + preprocess + parse — the later pipeline
+///   stages (sema, IR, codegen) are not yet wired in — and writes
+///   nothing to the output path.
 /// * The process exits with code `1` iff the pipeline produced at least
 ///   one error-severity diagnostic; warnings alone do not fail the build.
 fn run_compile(file: &Path, mode: Mode, options: &CompileOptions, _build_output: Option<&Path>) {
@@ -248,6 +284,13 @@ fn run_compile(file: &Path, mode: Mode, options: &CompileOptions, _build_output:
                 .filter(|t| !matches!(t.kind, TokenKind::Eof))
                 .count();
             println!("preprocessing successful, {token_count} tokens");
+        }
+        Mode::Parse => {
+            if let Some(ast) = &output.ast {
+                // `print!` — `print_ast` already terminates each node
+                // line with `\n`, so the whole string ends in a newline.
+                print!("{}", print_ast(ast));
+            }
         }
         Mode::Build => {
             // Backend not yet implemented — produce no artifact, just

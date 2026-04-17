@@ -384,9 +384,15 @@ impl Preprocessor {
                 Some(t) => t,
                 None => return false,
             };
-            let name = match &tok.token.kind {
-                TokenKind::Identifier(s) => s,
-                _ => return false,
+            // Any identifier-shaped token — user identifier *or* C
+            // keyword — can be a macro name (C17 §6.10.3), so keyword
+            // tokens must be eligible for expansion.  Without this,
+            // `#define _Noreturn __attribute__((noreturn))` (common in
+            // glibc on pre-C11 toolchains) would never rewrite the
+            // keyword token.
+            let name = match tok.token.kind.identifier_spelling() {
+                Some(s) => s,
+                None => return false,
             };
             // `_Pragma` is an operator (C17 §6.10.9), not a macro.
             // Intercept it here so an expansion-produced `_Pragma(...)`
@@ -413,7 +419,7 @@ impl Preprocessor {
                 return self.expand_magic_macro(cursor);
             }
             match self.macros.get(name) {
-                Some(MacroDef::ObjectLike { .. }) => (name.clone(), false),
+                Some(MacroDef::ObjectLike { .. }) => (name.to_owned(), false),
                 Some(MacroDef::FunctionLike { .. }) => {
                     // Must be immediately followed by `(` to count as an
                     // invocation.  The `(` may carry a leading space —
@@ -422,7 +428,9 @@ impl Preprocessor {
                     // inside a preprocessing directive.  We treat any
                     // next token kind of `LeftParen` as an invocation.
                     match cursor.peek_nth(1) {
-                        Some(t) if matches!(t.kind(), TokenKind::LeftParen) => (name.clone(), true),
+                        Some(t) if matches!(t.kind(), TokenKind::LeftParen) => {
+                            (name.to_owned(), true)
+                        }
                         _ => return false,
                     }
                 }
@@ -971,6 +979,7 @@ impl Preprocessor {
             Some("else") => self.handle_else(&name_tok.token, cursor),
             Some("endif") => self.handle_endif(&name_tok.token, cursor),
             Some("include") => self.handle_include(&name_tok.token, cursor),
+            Some("include_next") => self.handle_include_next(&name_tok.token, cursor),
             Some("error") => self.handle_error(hash, cursor),
             Some("warning") => self.handle_warning(hash, cursor),
             Some("line") => self.handle_line(hash, cursor),
@@ -1186,10 +1195,14 @@ impl Preprocessor {
             &format!("`#{directive_name}` requires an identifier"),
         )?;
         cursor.skip_to_end_of_line();
-        match tok.kind {
-            TokenKind::Identifier(s) => Some(s),
-            _ => unreachable!("expect_identifier_on_line guarantees an Identifier"),
-        }
+        // `expect_identifier_on_line` guarantees an identifier-shaped
+        // token (user identifier *or* any C keyword).
+        Some(
+            tok.kind
+                .identifier_spelling()
+                .expect("expect_identifier_on_line guarantees an identifier-shaped token")
+                .to_owned(),
+        )
     }
 
     /// Evaluate the expression portion of `#if` / `#elif`: substitute
@@ -1211,6 +1224,11 @@ impl Preprocessor {
     ///
     /// This runs **before** macro expansion so that `defined FOO` is
     /// answered by the macro table rather than by expanding `FOO`.
+    ///
+    /// Any identifier-shaped token is an acceptable operand, including
+    /// C keywords: at the preprocessor level there are no reserved
+    /// words, so `defined(_Noreturn)` must check the macro table for
+    /// `_Noreturn` rather than erroring on the keyword token.
     fn substitute_defined_operator(&mut self, tokens: Vec<PPToken>) -> Vec<PPToken> {
         let mut out: Vec<PPToken> = Vec::new();
         let mut i = 0;
@@ -1233,13 +1251,9 @@ impl Preprocessor {
             if with_paren {
                 j += 1;
             }
-            let ident_name = match tokens.get(j) {
-                Some(t) => match &t.token.kind {
-                    TokenKind::Identifier(s) => Some(s.clone()),
-                    _ => None,
-                },
-                None => None,
-            };
+            let ident_name = tokens
+                .get(j)
+                .and_then(|t| t.token.kind.identifier_spelling().map(str::to_owned));
 
             match ident_name {
                 Some(name) => {
@@ -1385,10 +1399,15 @@ impl Preprocessor {
                 None => return,
             };
 
-        let name = match &name_tok.kind {
-            TokenKind::Identifier(s) => s.clone(),
-            _ => unreachable!("expect_identifier_on_line returned a non-identifier"),
-        };
+        // `expect_identifier_on_line` guarantees an identifier-shaped
+        // token — either a plain identifier or any C keyword.  Keywords
+        // are legal macro names (C17 §6.10.3), so we read the spelling
+        // rather than pattern-matching on `Identifier` only.
+        let name = name_tok
+            .kind
+            .identifier_spelling()
+            .expect("expect_identifier_on_line returned a non-identifier-shaped token")
+            .to_owned();
 
         // Function-like iff the next token is `(` with NO leading space
         // (and on the same line).  With a leading space the `(` is part
@@ -1566,16 +1585,25 @@ impl Preprocessor {
                 None => return,
             };
 
-        if let TokenKind::Identifier(name) = &name_tok.kind {
+        // Keywords can name macros just like plain identifiers, so read
+        // the spelling via [`TokenKind::identifier_spelling`] rather than
+        // pattern-matching on [`TokenKind::Identifier`] alone.
+        if let Some(name) = name_tok.kind.identifier_spelling() {
             self.macros.remove(name);
         }
         cursor.skip_to_end_of_line();
     }
 
-    /// Consume the next token and require it to be an [`TokenKind::Identifier`]
-    /// on the current line.  On any mismatch, push a diagnostic anchored
-    /// at `anchor` (typically the directive's `#` token) with `missing_msg`,
+    /// Consume the next token and require it to be identifier-shaped on
+    /// the current line.  On any mismatch, push a diagnostic anchored at
+    /// `anchor` (typically the directive's `#` token) with `missing_msg`,
     /// then skip to end-of-line and return `None`.
+    ///
+    /// "Identifier-shaped" here means [`TokenKind::Identifier`] *or* any
+    /// C keyword (`int`, `_Noreturn`, `_Static_assert`, …): at the
+    /// preprocessor level there are no reserved words, so `#define int
+    /// foo`, `#undef _Noreturn`, and `#ifdef _Static_assert` are all
+    /// legal per C17 §6.4.1.
     fn expect_identifier_on_line(
         &mut self,
         cursor: &mut TokenCursor,
@@ -1595,7 +1623,7 @@ impl Preprocessor {
             return None;
         }
 
-        if !matches!(tok.kind(), TokenKind::Identifier(_)) {
+        if !tok.kind().is_identifier_like() {
             self.diagnostics.push(
                 Diagnostic::error(format!("{missing_msg} (found a non-identifier token)"))
                     .span(tok.token.span.range()),
@@ -1971,18 +1999,7 @@ impl Preprocessor {
         };
         let (header, is_system) = parsed;
 
-        // Depth check — outermost frame counts as depth 0, so the first
-        // `#include` makes depth 1.
-        let current_depth = self.include_stack.last().map(|f| f.depth).unwrap_or(0);
-        if current_depth + 1 > self.max_include_depth {
-            self.diagnostics.push(
-                Diagnostic::error(format!(
-                    "`#include` nesting too deep (limit: {})",
-                    self.max_include_depth
-                ))
-                .span(hash.span.range())
-                .label("including this file would exceed the include-depth limit"),
-            );
+        if !self.check_include_depth(hash) {
             return;
         }
 
@@ -1999,6 +2016,74 @@ impl Preprocessor {
             return;
         };
 
+        self.enter_resolved_include(resolved, hash);
+    }
+
+    /// Handle `#include_next <foo.h>` / `#include_next "foo.h"` — a GNU
+    /// extension heavily relied on by glibc's wrapper headers.
+    ///
+    /// Resolution differs from `#include`: the search begins at the
+    /// include-path entry *after* the one that provided the currently
+    /// including file.  This lets a wrapper header (e.g. GCC's
+    /// `/usr/lib/gcc/.../include/stdint.h`) delegate to the *next*
+    /// instance of the same header further down the search list (e.g.
+    /// glibc's `/usr/include/stdint.h`).
+    ///
+    /// Unlike `#include`, a failed lookup is not an error — the GNU
+    /// extension treats the chain as optional, so running out of paths
+    /// silently drops the directive.  This matches GCC's behaviour for
+    /// primary-source uses and for wrapper headers whose chain has been
+    /// exhausted.
+    fn handle_include_next(&mut self, hash: &Token, cursor: &mut TokenCursor) {
+        let line_tokens = cursor.collect_to_end_of_line();
+
+        let parsed = match self.parse_include_argument(&line_tokens, hash) {
+            Some(v) => v,
+            None => return, // error already recorded
+        };
+        let (header, _is_system) = parsed;
+
+        if !self.check_include_depth(hash) {
+            return;
+        }
+
+        let Some(resolved) = self.resolve_include_next(&header) else {
+            // Silent miss — matches GCC's lenient handling of this GNU
+            // extension when the header chain terminates.
+            return;
+        };
+
+        self.enter_resolved_include(resolved, hash);
+    }
+
+    /// Enforce [`PreprocessConfig::max_include_depth`] at the point of
+    /// an `#include` / `#include_next`.  Returns `true` when the new
+    /// depth is within the budget; otherwise records an error and
+    /// returns `false`.
+    fn check_include_depth(&mut self, hash: &Token) -> bool {
+        let current_depth = self.include_stack.last().map(|f| f.depth).unwrap_or(0);
+        if current_depth + 1 > self.max_include_depth {
+            self.diagnostics.push(
+                Diagnostic::error(format!(
+                    "`#include` nesting too deep (limit: {})",
+                    self.max_include_depth
+                ))
+                .span(hash.span.range())
+                .label("including this file would exceed the include-depth limit"),
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Push a resolved header onto the include stack, lex its contents,
+    /// and drive preprocessing through it.  Shared between `#include`
+    /// and `#include_next` once the header path has been located.
+    ///
+    /// Handles `#pragma once` short-circuiting, circular-include
+    /// detection, `__FILE__` / `__LINE__` context save/restore, and the
+    /// include-guard cache that retires headers after their first pass.
+    fn enter_resolved_include(&mut self, resolved: PathBuf, hash: &Token) {
         // Skip silently if `#pragma once` has retired this file.
         if self.pragma_once_files.contains(&resolved) {
             return;
@@ -2055,7 +2140,7 @@ impl Preprocessor {
             std::mem::replace(&mut self.line_starts, compute_line_starts(&source));
         let saved_line_offset = self.line_offset.take();
         let saved_file_override = self.file_override.take();
-        let new_depth = current_depth + 1;
+        let new_depth = self.include_stack.last().map(|f| f.depth).unwrap_or(0) + 1;
         self.include_stack
             .push(IncludeFrame::file(resolved.clone(), new_depth));
 
@@ -2160,6 +2245,53 @@ impl Preprocessor {
         // Configured search paths — same order for both forms, only the
         // *additional* first-search differs.
         for base in &self.include_paths {
+            let candidate = base.join(header_path);
+            if candidate.is_file() {
+                return canonicalise(&candidate);
+            }
+        }
+
+        None
+    }
+
+    /// Resolve a `#include_next` header.
+    ///
+    /// The search begins *after* the include-path entry whose directory
+    /// matches the current file's parent directory — this is how GCC
+    /// makes wrapper headers (e.g. `/usr/lib/gcc/.../stdint.h`) delegate
+    /// to the next copy further down the list (e.g. glibc's
+    /// `/usr/include/stdint.h`).
+    ///
+    /// If the current file's directory cannot be located in the search
+    /// list (for instance, when the file was found via the quote-form
+    /// current-directory rule, or when the top-level file is the one
+    /// invoking `#include_next`), the search falls back to scanning the
+    /// entire include path, matching GCC's behaviour.
+    ///
+    /// Absolute header paths are resolved directly, just like in
+    /// [`Self::resolve_include`].
+    fn resolve_include_next(&self, header: &str) -> Option<PathBuf> {
+        let header_path = Path::new(header);
+        if header_path.is_absolute() {
+            let candidate = header_path.to_path_buf();
+            if candidate.is_file() {
+                return canonicalise(&candidate);
+            }
+            return None;
+        }
+
+        let start = self
+            .current_file_directory()
+            .and_then(|dir| canonicalise(&dir))
+            .and_then(|current_dir| {
+                self.include_paths
+                    .iter()
+                    .position(|base| canonicalise(base).as_deref() == Some(current_dir.as_path()))
+            })
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+
+        for base in self.include_paths.iter().skip(start) {
             let candidate = base.join(header_path);
             if candidate.is_file() {
                 return canonicalise(&candidate);
@@ -2376,6 +2508,11 @@ fn directive_name_of(tok: &Token) -> Option<String> {
 /// After macro expansion, any surviving identifier in a `#if` expression
 /// is treated as `0` — C17 §6.10.1/4.
 ///
+/// "Identifier" here means any identifier-shaped token — user
+/// identifiers *and* C keywords.  The preprocessor has no reserved
+/// words, so a `_Noreturn` or `_Static_assert` token that survives
+/// expansion is an unknown identifier and must also become `0`.
+///
 /// This also swallows function-call-shaped syntax whose head identifier
 /// survived macro expansion: `IDENT(anything)` becomes a single `0`.
 /// Strict C17 would instead error on such a construct (since `0(...)` is
@@ -2389,7 +2526,7 @@ fn zero_remaining_identifiers(tokens: Vec<PPToken>) -> Vec<PPToken> {
     let mut i = 0;
     while i < tokens.len() {
         let tok = &tokens[i];
-        if matches!(&tok.token.kind, TokenKind::Identifier(_)) {
+        if tok.token.kind.is_identifier_like() {
             // If the next non-space token is `(`, consume the entire
             // balanced call and emit a single `0` in its place.
             let next_is_paren = matches!(
@@ -2792,9 +2929,12 @@ fn detect_include_guard(tokens: &[Token]) -> bool {
         return false;
     }
     i += 1;
-    let guard_name = match tokens.get(i).map(|t| &t.kind) {
-        Some(TokenKind::Identifier(s)) => s.clone(),
-        _ => return false,
+    // The guard name itself may be any identifier-shaped token — user
+    // identifier or C keyword — since the preprocessor has no reserved
+    // words.  Keyword-named guards are rare but legal.
+    let guard_name = match tokens.get(i).and_then(|t| t.kind.identifier_spelling()) {
+        Some(s) => s.to_owned(),
+        None => return false,
     };
     i += 1;
 
@@ -2819,10 +2959,10 @@ fn detect_include_guard(tokens: &[Token]) -> bool {
         return false;
     }
     i += 1;
-    let matches_name = matches!(
-        tokens.get(i).map(|t| &t.kind),
-        Some(TokenKind::Identifier(s)) if *s == guard_name
-    );
+    let matches_name = tokens
+        .get(i)
+        .and_then(|t| t.kind.identifier_spelling())
+        .is_some_and(|s| s == guard_name);
     if !matches_name {
         return false;
     }

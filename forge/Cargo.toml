@@ -6,6 +6,7 @@ members = [
     "crates/forge_diagnostics",
     "crates/forge_lexer",
     "crates/forge_preprocess",
+    "crates/forge_parser",
 ]
 
 [workspace.package]
@@ -21,3 +22,4 @@ forge_driver = { path = "crates/forge_driver" }
 forge_diagnostics = { path = "crates/forge_diagnostics" }
 forge_lexer = { path = "crates/forge_lexer" }
 forge_preprocess = { path = "crates/forge_preprocess" }
+forge_parser = { path = "crates/forge_parser" }

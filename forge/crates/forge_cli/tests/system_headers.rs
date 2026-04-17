@@ -92,6 +92,33 @@ fn run_forge_e_on_header(header: &str, tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Run `forge parse` on a generated file that `#include`s `header`
+/// followed by a trivial `main` — exercises the whole lex + preprocess
+/// + parse pipeline on real glibc/libc headers.
+fn run_forge_parse_on_header(header: &str, tag: &str) -> Result<(), String> {
+    let tmp = TempDir::new(tag);
+    let src = tmp.file(
+        "main.c",
+        &format!("#include <{header}>\nint main(void) {{ return 0; }}\n"),
+    );
+
+    let output = Command::new(FORGE_BIN)
+        .arg("parse")
+        .arg(&src)
+        .output()
+        .map_err(|e| format!("spawn failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "forge parse <{header}> exited {}\n--- stderr (head) ---\n{}",
+            output.status,
+            stderr.chars().take(4_000).collect::<String>()
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // One test per canonical C17 system header
 // ---------------------------------------------------------------------------
@@ -207,6 +234,122 @@ fn system_header_math_preprocesses_cleanly() {
 }
 
 // ---------------------------------------------------------------------------
+// One parser test per canonical C17 system header — exercises the full
+// lex + preprocess + parse pipeline on each header in isolation, so a
+// parser regression on any single header surfaces with a precise name.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn system_header_stddef_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("stddef.h", "p_stddef") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_stdint_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("stdint.h", "p_stdint") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_limits_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("limits.h", "p_limits") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_stdio_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("stdio.h", "p_stdio") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_stdlib_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("stdlib.h", "p_stdlib") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_string_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("string.h", "p_string") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_errno_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("errno.h", "p_errno") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_assert_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("assert.h", "p_assert") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_ctype_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("ctype.h", "p_ctype") {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn system_header_math_parses_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    if let Err(e) = run_forge_parse_on_header("math.h", "p_math") {
+        panic!("{e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Combined smoke test — a realistic translation unit
 // ---------------------------------------------------------------------------
 
@@ -274,5 +417,69 @@ int main(int argc, char **argv) {
     assert!(
         !stdout.contains("#define"),
         "#define directive leaked into preprocessed output"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Parser smoke test — the critical Prompt 3.6 gate
+// ---------------------------------------------------------------------------
+
+/// Run `forge parse` on a source file that includes every canonical C17
+/// system header the compiler promises to support.  Asserts that the
+/// whole lex → preprocess → parse pipeline completes with zero
+/// error-severity diagnostics (printed to stderr by the driver) and a
+/// zero process exit status.
+///
+/// This is the Prompt 3.6 acceptance gate — before it existed the
+/// parser tripped on `__attribute__`, `__extension__`, `__typeof__`,
+/// `__asm__`, and every `__builtin_*` in glibc.  A regression in any
+/// GNU-extension tolerance path surfaces here first.
+#[test]
+fn parser_accepts_full_system_header_set() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    let tmp = TempDir::new("parser_smoke");
+    let src = tmp.file(
+        "main.c",
+        r#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+int main(void) {
+    return 0;
+}
+"#,
+    );
+
+    let output = Command::new(FORGE_BIN)
+        .arg("parse")
+        .arg(&src)
+        .output()
+        .expect("spawn forge parse on system-header smoke source");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "forge parse failed ({}):\n--- stderr (head) ---\n{}\n--- stdout (head) ---\n{}",
+        output.status,
+        stderr.chars().take(4_000).collect::<String>(),
+        stdout.chars().take(1_000).collect::<String>()
+    );
+
+    // The user's own `main` must survive unchanged through the whole
+    // pipeline and show up in the printed AST.
+    assert!(
+        stdout.contains("FunctionDef"),
+        "printed AST lacks any FunctionDef:\n{}",
+        stdout.chars().take(2_000).collect::<String>()
+    );
+    assert!(
+        stdout.contains("main"),
+        "printed AST lacks the `main` declarator name"
     );
 }

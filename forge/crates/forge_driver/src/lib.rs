@@ -53,16 +53,39 @@ use std::path::PathBuf;
 
 pub use forge_diagnostics::{Diagnostic, Severity};
 pub use forge_lexer::{Lexer, Token, TokenKind};
+pub use forge_parser::printer::print_ast;
+pub use forge_parser::{Parser, TranslationUnit};
 pub use forge_preprocess::{
     detect_system_include_paths, spelling_of, PreprocessConfig, Preprocessor, TargetArch,
 };
 
+/// How far the driver should run the compilation pipeline before
+/// returning control to the caller.
+///
+/// The CLI maps `-E` to [`CompileStage::Preprocess`] and every other
+/// subcommand (`check`, `parse`, `build`) to [`CompileStage::Parse`].
+/// The default is [`CompileStage::Parse`] — a library consumer that
+/// takes the defaults gets the full front-end pipeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CompileStage {
+    /// Stop after the preprocessor.  Matches `forge -E`: callers that
+    /// want the post-preprocessor token stream but deliberately *not*
+    /// the parser's verdict on it (e.g. a raw token-dump probe on a
+    /// source fragment that is not a complete translation unit).
+    Preprocess,
+    /// Lex + preprocess + parse.  The default — produces an AST plus
+    /// the combined diagnostics of all three phases.
+    #[default]
+    Parse,
+}
+
 /// How the driver should drive the compilation pipeline.
 ///
 /// Matches the CLI flag set: include search paths, command-line
-/// `-D` / `-U` macro operations, and the target architecture.  The CLI
-/// builds one of these from its parsed arguments and hands it to
-/// [`compile`].
+/// `-D` / `-U` macro operations, the target architecture, and a
+/// [`CompileStage`] cap that controls how far past the preprocessor
+/// [`compile`] runs.  The CLI builds one of these from its parsed
+/// arguments and hands it to [`compile`].
 #[derive(Clone, Debug, Default)]
 pub struct CompileOptions {
     /// Directories searched for `#include <...>` and (after the current
@@ -75,6 +98,10 @@ pub struct CompileOptions {
     pub undefines: Vec<String>,
     /// Target architecture the preprocessor should configure itself for.
     pub target_arch: TargetArch,
+    /// Last pipeline phase to run.  Defaults to [`CompileStage::Parse`]
+    /// (the full front-end); `-E` sets this to [`CompileStage::Preprocess`]
+    /// so parser diagnostics do not fire on a preprocessor-only probe.
+    pub stage: CompileStage,
 }
 
 /// One `-D NAME[=VALUE]` definition supplied on the command line.
@@ -199,6 +226,10 @@ pub struct CompileOutput {
     /// The full post-preprocessor token stream, terminated by
     /// [`TokenKind::Eof`].
     pub tokens: Vec<Token>,
+    /// The parsed AST, if the parser phase ran.  Always present after a
+    /// successful [`compile`] call (parsing is unconditional and always
+    /// yields a possibly-partial tree even on error).
+    pub ast: Option<TranslationUnit>,
     /// Diagnostics collected from every pipeline phase, in emission order.
     pub diagnostics: Vec<Diagnostic>,
     /// The source text actually fed to the lexer — the user's original
@@ -219,11 +250,19 @@ impl CompileOutput {
     }
 }
 
-/// Run the full compilation pipeline on the given source text.
+/// Run the compilation pipeline on the given source text.
 ///
-/// The pipeline currently covers lexing and preprocessing.  `options`
-/// carries every CLI-driven knob — include paths, `-D`/`-U` macro
-/// operations, target architecture — that shapes either phase.
+/// The pipeline currently covers lexing, preprocessing, and — when
+/// [`CompileOptions::stage`] is [`CompileStage::Parse`] (the default) —
+/// parsing.  `options` carries every CLI-driven knob: include paths,
+/// `-D`/`-U` macro operations, the target architecture, and the stage
+/// cap.
+///
+/// Callers that want only the post-preprocessor token stream (e.g.
+/// `forge -E`) pass [`CompileStage::Preprocess`] and get back an
+/// [`CompileOutput`] with `ast = None` and no parser diagnostics.  All
+/// other callers receive a (possibly partial) AST — the parser yields
+/// one on every input, valid or not.
 ///
 /// `filename` is used for `__FILE__` expansions, for `#include "..."`
 /// relative resolution, and for the `#line` reset that makes user
@@ -280,11 +319,42 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
     };
     diagnostics.extend(pp.take_diagnostics());
 
+    // ---- Parse (optional — skipped for `forge -E`).
+    //
+    // The parser consumes its token vector, so we clone the post-pp
+    // stream before handing it off.  The clone is paid for only when
+    // the caller asked for a parse; `-E` and other preprocess-only
+    // consumers keep the zero-copy path.
+    let ast = match options.stage {
+        CompileStage::Preprocess => None,
+        CompileStage::Parse => {
+            let (tu, parser_diagnostics) = Parser::parse(pp_tokens.clone());
+            diagnostics.extend(parser_diagnostics);
+            Some(tu)
+        }
+    };
+
     CompileOutput {
         tokens: pp_tokens,
+        ast,
         diagnostics,
         effective_source,
     }
+}
+
+/// Run the parser on a post-preprocessor token stream.
+///
+/// Returns `(translation_unit, parser_diagnostics)` — the parser always
+/// yields a (possibly partial) AST plus its own diagnostics, even on
+/// syntactic errors.
+///
+/// [`compile`] invokes this internally when
+/// [`CompileOptions::stage`] is [`CompileStage::Parse`].  The free
+/// function is kept exported for callers that already have a token
+/// stream in hand (e.g. tests that build one manually) and want to run
+/// the parser without re-lexing.
+pub fn parse_tokens(tokens: Vec<Token>) -> (TranslationUnit, Vec<Diagnostic>) {
+    Parser::parse(tokens)
 }
 
 /// Build the synthetic preamble the driver prepends to the user's source.
@@ -464,7 +534,9 @@ mod tests {
     fn compile_surfaces_lexer_warnings_without_error_flag() {
         // Integer overflow produces a warning-severity diagnostic; it must
         // be visible on the output even though `has_errors` stays false.
-        let out = compile("warn.c", "99999999999999999999999999", &opts());
+        // The literal is wrapped in a well-formed declaration so the
+        // parser phase does not add spurious error-severity diagnostics.
+        let out = compile("warn.c", "int x = 99999999999999999999999999;\n", &opts());
         assert!(
             !out.has_errors(),
             "overflow is a warning, not an error: {:?}",

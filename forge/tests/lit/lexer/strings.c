@@ -5,6 +5,13 @@
 // uses Rust's string-escaping so a source-level `\t` shows up as `\t` in
 // the rendered value.
 //
+// Bare literals are not a valid C translation unit; `forge check`
+// runs the parser after the lexer, so parser errors are expected.
+// The `// ERROR:` directive lets the lit runner accept the non-zero
+// exit while the CHECK directives above still validate the lexer's
+// token output on stdout.
+// ERROR: expected
+//
 // Unprefixed strings and escapes: \n \t \\ \" \0 and a hex escape.
 // CHECK: StringLiteral { value: "hello", prefix: None }
 // CHECK: StringLiteral { value: "a\tb", prefix: None }

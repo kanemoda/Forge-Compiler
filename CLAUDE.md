@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Forge is a C17 compiler written in Rust. It compiles standard C17 source code to native x86-64 and AArch64 executables. Its four differentiators are: e-graph-based optimization (using the `egg` crate), Alive2-style verified passes (using Z3), fine-grained incremental compilation, and energy-aware code generation.
+Forge is a C17 compiler written in Rust. It compiles standard C17 source code to native x86-64 executables. Its four differentiators are: e-graph-based optimization (using the `egg` crate), Alive2-style verified passes (using Z3), fine-grained incremental compilation, and energy-aware code generation.
 
 ## Repository Structure
 
@@ -20,7 +20,6 @@ forge/
 │   ├── forge_egraph/        — Library: e-graph optimizer (egg)
 │   ├── forge_codegen/       — Library: shared codegen infrastructure
 │   ├── forge_x86_64/        — Library: x86-64 backend
-│   ├── forge_aarch64/       — Library: AArch64 backend
 │   ├── forge_verify/        — Library: SMT verification (Z3) [optional feature]
 │   ├── forge_incr/          — Library: incremental compilation
 │   └── forge_energy/        — Library: energy-aware code generation
@@ -111,15 +110,6 @@ cargo run -- emit-ir input.c
 - Callee-saved: RBX, RBP, R12-R15
 - Stack aligned to 16 bytes at call
 
-### AArch64 (LP64)
-- Same type sizes as x86-64
-- Calling convention: AAPCS64
-- Integer args: X0-X7
-- Float args: V0-V7
-- Return: X0 (int), V0 (float)
-- Callee-saved: X19-X28, V8-V15
-- Stack aligned to 16 bytes
-
 ## Key Dependencies
 
 | Crate | Used For |
@@ -141,7 +131,7 @@ Check MASTER_PLAN.md for the current development phase and phases/<current_phase
 ### Adding a new IR opcode
 1. Add variant to `Opcode` enum in `forge_ir`
 2. Add encoding in `forge_egraph` language definition
-3. Add instruction selection in both `forge_x86_64` and `forge_aarch64`
+3. Add instruction selection in `forge_x86_64`
 4. Add to IR printer and parser
 5. Add to IR verifier type checking
 6. Add tests at each level
@@ -166,7 +156,6 @@ Diagnostic::error("expected ';' after expression")
 - Primary dev machine: Ubuntu 24.04, x86-64, Ryzen 3600, 16GB RAM
 - Z3 required for verification: `sudo apt install libz3-dev`
 - System headers needed for #include tests: `sudo apt install libc6-dev`
-- Cross-compilation for AArch64: `sudo apt install gcc-aarch64-linux-gnu`
 
 ## Test Organization Rules (MANDATORY)
 

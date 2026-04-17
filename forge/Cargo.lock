@@ -183,6 +183,7 @@ version = "0.1.0"
 dependencies = [
  "forge_diagnostics",
  "forge_lexer",
+ "forge_parser",
  "forge_preprocess",
 ]
 
@@ -191,6 +192,14 @@ name = "forge_lexer"
 version = "0.1.0"
 dependencies = [
  "forge_diagnostics",
+]
+
+[[package]]
+name = "forge_parser"
+version = "0.1.0"
+dependencies = [
+ "forge_diagnostics",
+ "forge_lexer",
 ]
 
 [[package]]

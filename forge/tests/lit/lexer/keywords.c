@@ -5,6 +5,13 @@
 // avoid substring collisions — for example, a bare `Static` would also
 // match the line emitted for `_Static_assert` (StaticAssert).
 //
+// The bare keyword list is not a valid C translation unit; `forge
+// check` runs the parser after the lexer, so parser errors are
+// expected.  The `// ERROR:` directive lets the lit runner accept the
+// non-zero exit while the CHECK directives above still validate
+// lexer-level output on stdout.
+// ERROR: expected
+//
 // CHECK: Auto span=
 // CHECK: Break span=
 // CHECK: Case span=

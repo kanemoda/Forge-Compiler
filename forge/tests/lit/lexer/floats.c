@@ -4,6 +4,13 @@
 // exactly representable in f64, so the Debug-printed value in the token
 // line is stable across platforms.
 //
+// Bare literals are not a valid C translation unit; `forge check`
+// runs the parser after the lexer, so parser errors are expected.
+// The `// ERROR:` directive lets the lit runner accept the non-zero
+// exit while the CHECK directives above still validate the lexer's
+// token output on stdout.
+// ERROR: expected
+//
 // Decimal floats: ordinary "int.frac", leading-dot, trailing-dot, and
 // exponent-only forms all take the float path.
 // CHECK: FloatLiteral { value: 1.5, suffix: None }
