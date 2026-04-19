@@ -743,6 +743,35 @@ impl Printer {
                     }
                 });
             }
+            Expr::BuiltinOffsetof { ty, designator, .. } => {
+                self.line("BuiltinOffsetof");
+                self.with_indent(|p| {
+                    p.line("Type:");
+                    p.with_indent(|p| p.type_name(ty));
+                    p.line("Designator:");
+                    p.with_indent(|p| {
+                        for step in designator {
+                            match step {
+                                OffsetofMember::Field(name) => p.line(&format!(".{name}")),
+                                OffsetofMember::Subscript(idx) => {
+                                    p.line("[");
+                                    p.with_indent(|p| p.expr(idx));
+                                    p.line("]");
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+            Expr::BuiltinTypesCompatibleP { t1, t2, .. } => {
+                self.line("BuiltinTypesCompatibleP");
+                self.with_indent(|p| {
+                    p.line("T1:");
+                    p.with_indent(|p| p.type_name(t1));
+                    p.line("T2:");
+                    p.with_indent(|p| p.type_name(t2));
+                });
+            }
         }
     }
 

@@ -540,6 +540,7 @@ impl Parser {
                 specifiers,
                 declarators,
                 span: self.span_from(field_start),
+                node_id: self.next_id(),
             }));
         }
         members
@@ -1286,6 +1287,7 @@ impl Parser {
             specifiers,
             abstract_declarator,
             span: self.span_from(start),
+            node_id: self.next_id(),
         })
     }
 
@@ -1313,6 +1315,7 @@ impl Parser {
                 specifiers,
                 init_declarators,
                 span: self.span_from(start),
+                node_id: self.next_id(),
             };
         }
 
@@ -1344,6 +1347,7 @@ impl Parser {
                 declarator,
                 initializer,
                 span: self.span_from(decl_start),
+                node_id: self.next_id(),
             });
 
             if self.eat(&TokenKind::Comma).is_none() {
@@ -1361,6 +1365,7 @@ impl Parser {
             specifiers,
             init_declarators,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 

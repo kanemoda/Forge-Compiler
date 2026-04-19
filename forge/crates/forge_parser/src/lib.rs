@@ -46,6 +46,7 @@
 
 pub mod ast;
 pub mod ast_ops;
+pub mod node_id;
 pub mod printer;
 
 mod decl;
@@ -57,4 +58,5 @@ mod stmt;
 mod tests;
 
 pub use ast::TranslationUnit;
+pub use node_id::NodeId;
 pub use parser::Parser;

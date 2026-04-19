@@ -125,6 +125,7 @@ impl Parser {
                 Stmt::Expr {
                     expr: None,
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Identifier(_) if matches!(self.peek_ahead(1).kind, TokenKind::Colon) => {
@@ -210,6 +211,7 @@ impl Parser {
         Stmt::Expr {
             expr: None,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -234,6 +236,7 @@ impl Parser {
             then_branch,
             else_branch,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -248,6 +251,7 @@ impl Parser {
             condition,
             body,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -264,6 +268,7 @@ impl Parser {
             body,
             condition,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -311,6 +316,7 @@ impl Parser {
             update,
             body,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -325,6 +331,7 @@ impl Parser {
             expr,
             body,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -338,6 +345,7 @@ impl Parser {
             value,
             body,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -349,6 +357,7 @@ impl Parser {
         Stmt::Default {
             body,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -364,6 +373,7 @@ impl Parser {
         Stmt::Return {
             value,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -373,6 +383,7 @@ impl Parser {
         let _ = self.expect(&TokenKind::Semicolon);
         Stmt::Break {
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -382,6 +393,7 @@ impl Parser {
         let _ = self.expect(&TokenKind::Semicolon);
         Stmt::Continue {
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -410,6 +422,7 @@ impl Parser {
         Stmt::Goto {
             label,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -426,6 +439,7 @@ impl Parser {
             name,
             stmt,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -436,6 +450,7 @@ impl Parser {
         Stmt::Expr {
             expr: Some(expr),
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -504,6 +519,7 @@ impl Parser {
                 specifiers,
                 init_declarators: Vec::new(),
                 span: self.span_from(start),
+                node_id: self.next_id(),
             });
         }
 
@@ -521,6 +537,7 @@ impl Parser {
                 declarator,
                 body,
                 span: self.span_from(start),
+                node_id: self.next_id(),
             });
         }
 
@@ -543,6 +560,7 @@ impl Parser {
             declarator,
             initializer,
             span: self.span_from(decl_start),
+            node_id: self.next_id(),
         }];
 
         while self.eat(&TokenKind::Comma).is_some() {
@@ -567,6 +585,7 @@ impl Parser {
                 declarator,
                 initializer,
                 span: self.span_from(decl_start),
+                node_id: self.next_id(),
             });
         }
 
@@ -576,6 +595,7 @@ impl Parser {
             specifiers,
             init_declarators,
             span: self.span_from(start),
+            node_id: self.next_id(),
         })
     }
 

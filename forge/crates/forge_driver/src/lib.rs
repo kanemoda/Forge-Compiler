@@ -58,14 +58,19 @@ pub use forge_parser::{Parser, TranslationUnit};
 pub use forge_preprocess::{
     detect_system_include_paths, spelling_of, PreprocessConfig, Preprocessor, TargetArch,
 };
+pub use forge_sema::{analyze_translation_unit, SemaContext, SymbolTable, TargetInfo};
+
+#[cfg(test)]
+mod tests;
 
 /// How far the driver should run the compilation pipeline before
 /// returning control to the caller.
 ///
-/// The CLI maps `-E` to [`CompileStage::Preprocess`] and every other
-/// subcommand (`check`, `parse`, `build`) to [`CompileStage::Parse`].
-/// The default is [`CompileStage::Parse`] — a library consumer that
-/// takes the defaults gets the full front-end pipeline.
+/// The CLI maps `-E` to [`CompileStage::Preprocess`], the `parse`
+/// subcommand to [`CompileStage::Parse`], and every other subcommand
+/// (`check`, `build`) to [`CompileStage::Sema`].  The default is
+/// [`CompileStage::Sema`] — a library consumer that takes the defaults
+/// gets the full semantic-analysis front-end.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CompileStage {
     /// Stop after the preprocessor.  Matches `forge -E`: callers that
@@ -73,10 +78,15 @@ pub enum CompileStage {
     /// the parser's verdict on it (e.g. a raw token-dump probe on a
     /// source fragment that is not a complete translation unit).
     Preprocess,
-    /// Lex + preprocess + parse.  The default — produces an AST plus
-    /// the combined diagnostics of all three phases.
-    #[default]
+    /// Lex + preprocess + parse.  Produces an AST plus the combined
+    /// diagnostics of all three phases, but deliberately does not run
+    /// sema — used by the `parse` subcommand.
     Parse,
+    /// Lex + preprocess + parse + sema.  The default — produces an AST,
+    /// runs semantic analysis, and returns its diagnostics alongside
+    /// every earlier phase's.
+    #[default]
+    Sema,
 }
 
 /// How the driver should drive the compilation pipeline.
@@ -221,15 +231,23 @@ fn is_identifier(s: &str) -> bool {
 /// [`Diagnostic`] (error, warning, note) emitted along the way.  The CLI
 /// renders diagnostics unconditionally and exits non-zero iff
 /// [`CompileOutput::has_errors`] returns `true`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CompileOutput {
     /// The full post-preprocessor token stream, terminated by
     /// [`TokenKind::Eof`].
     pub tokens: Vec<Token>,
     /// The parsed AST, if the parser phase ran.  Always present after a
-    /// successful [`compile`] call (parsing is unconditional and always
+    /// successful [`compile`] call at [`CompileStage::Parse`] or
+    /// [`CompileStage::Sema`] (parsing is unconditional and always
     /// yields a possibly-partial tree even on error).
     pub ast: Option<TranslationUnit>,
+    /// Sema side tables (resolved types, implicit conversions, …),
+    /// populated only when [`CompileOptions::stage`] is
+    /// [`CompileStage::Sema`].
+    pub sema: Option<SemaContext>,
+    /// Final symbol table produced by sema, populated only when
+    /// [`CompileOptions::stage`] is [`CompileStage::Sema`].
+    pub symbol_table: Option<SymbolTable>,
     /// Diagnostics collected from every pipeline phase, in emission order.
     pub diagnostics: Vec<Diagnostic>,
     /// The source text actually fed to the lexer — the user's original
@@ -327,16 +345,43 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
     // consumers keep the zero-copy path.
     let ast = match options.stage {
         CompileStage::Preprocess => None,
-        CompileStage::Parse => {
+        CompileStage::Parse | CompileStage::Sema => {
             let (tu, parser_diagnostics) = Parser::parse(pp_tokens.clone());
             diagnostics.extend(parser_diagnostics);
             Some(tu)
         }
     };
 
+    // ---- Sema (optional — runs only when the caller explicitly asked
+    // for CompileStage::Sema).  Uses the LP64 target that every other
+    // phase in this driver currently assumes — a per-target story is a
+    // later prompt.
+    //
+    // Sema is *skipped* when any earlier phase emitted an error-severity
+    // diagnostic.  A syntactically broken input lands in sema with AST
+    // nodes that carry recovery-placeholder spans; re-analysing those
+    // only produces cascade errors and, worse, can trip the diagnostic
+    // renderer with inverted spans.  The front-end contract is "one
+    // phase at a time of responsibility" — once parse has failed, the
+    // only diagnostics worth surfacing are parse's own.
+    let earlier_has_errors = diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error));
+    let (sema, symbol_table) = match (options.stage, ast.as_ref(), earlier_has_errors) {
+        (CompileStage::Sema, Some(tu), false) => {
+            let target = TargetInfo::x86_64_linux();
+            let (ctx, table) = analyze_translation_unit(tu, &target);
+            diagnostics.extend(ctx.diagnostics.iter().cloned());
+            (Some(ctx), Some(table))
+        }
+        _ => (None, None),
+    };
+
     CompileOutput {
         tokens: pp_tokens,
         ast,
+        sema,
+        symbol_table,
         diagnostics,
         effective_source,
     }
@@ -475,7 +520,7 @@ pub fn format_token(source: &str, tok: &Token) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+mod pipeline_tests {
     use super::*;
 
     fn opts() -> CompileOptions {

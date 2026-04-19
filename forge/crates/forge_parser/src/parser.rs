@@ -12,6 +12,7 @@ use forge_diagnostics::Diagnostic;
 use forge_lexer::{Span, Token, TokenKind};
 
 use crate::ast::*;
+use crate::node_id::NodeId;
 
 /// Recursive descent parser for C17.
 ///
@@ -32,6 +33,9 @@ pub struct Parser {
     diagnostics: Vec<Diagnostic>,
     /// Set to `true` when any error-severity diagnostic is emitted.
     has_errors: bool,
+    /// Monotonic counter handed out by [`Parser::next_id`].  Each value
+    /// is used exactly once per parse of a translation unit.
+    next_node_id: u32,
 }
 
 impl Parser {
@@ -68,7 +72,20 @@ impl Parser {
             typedefs: vec![initial_scope],
             diagnostics: Vec::new(),
             has_errors: false,
+            next_node_id: 0,
         }
+    }
+
+    /// Mint a fresh [`NodeId`] and advance the internal counter.
+    ///
+    /// Every AST variant that semantic analysis will annotate obtains its
+    /// id through this method.  IDs are dense, start at zero, and are
+    /// unique within a single `Parser`'s lifetime — see
+    /// [`crate::node_id`] for the cross-parse stability note.
+    pub(crate) fn next_id(&mut self) -> NodeId {
+        let id = self.next_node_id;
+        self.next_node_id += 1;
+        NodeId(id)
     }
 
     /// Parse a complete translation unit.

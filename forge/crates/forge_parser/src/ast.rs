@@ -21,6 +21,7 @@
 use forge_lexer::{CharPrefix, FloatSuffix, IntSuffix, Span, StringPrefix};
 
 use crate::ast_ops::{AssignOp, BinaryOp, PostfixOp, UnaryOp};
+use crate::node_id::NodeId;
 
 // =========================================================================
 // Translation unit
@@ -57,6 +58,8 @@ pub struct FunctionDef {
     pub body: CompoundStmt,
     /// Span from the first specifier to the closing `}`.
     pub span: Span,
+    /// Parse-unique identifier used as a key in semantic side tables.
+    pub node_id: NodeId,
 }
 
 // =========================================================================
@@ -75,6 +78,8 @@ pub struct Declaration {
     pub init_declarators: Vec<InitDeclarator>,
     /// Span covering the full declaration including the trailing `;`.
     pub span: Span,
+    /// Parse-unique identifier used as a key in semantic side tables.
+    pub node_id: NodeId,
 }
 
 /// The collected specifiers that precede a declarator.
@@ -218,6 +223,8 @@ pub struct InitDeclarator {
     pub initializer: Option<Initializer>,
     /// Span covering the declarator and initialiser.
     pub span: Span,
+    /// Parse-unique identifier used as a key in semantic side tables.
+    pub node_id: NodeId,
 }
 
 /// A declarator: zero or more pointer prefixes followed by a direct
@@ -352,6 +359,8 @@ pub struct StructField {
     pub declarators: Vec<StructFieldDeclarator>,
     /// Span covering the field declaration.
     pub span: Span,
+    /// Parse-unique identifier used as a key in semantic side tables.
+    pub node_id: NodeId,
 }
 
 /// One declarator within a struct field declaration, with optional
@@ -397,6 +406,11 @@ pub struct Enumerator {
 // =========================================================================
 
 /// An initialiser: either a single expression or a braced list.
+///
+/// The `Expr` variant is a thin tuple wrapper — the wrapped
+/// [`Expr`] already carries its own [`NodeId`] and [`Span`] for
+/// semantic-analysis bookkeeping.  `List` is a structural node in
+/// its own right and therefore carries a dedicated `NodeId`.
 #[derive(Clone, Debug)]
 pub enum Initializer {
     /// `= expr`
@@ -407,6 +421,8 @@ pub enum Initializer {
         items: Vec<DesignatedInit>,
         /// Span covering `{ ... }`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 }
 
@@ -456,6 +472,12 @@ pub enum BlockItem {
 }
 
 /// A C17 statement.
+///
+/// Every struct-shape variant carries a `node_id: NodeId` alongside its
+/// `span: Span`.  The tuple variant [`Stmt::Compound`] defers its
+/// identity to the wrapped [`CompoundStmt`] — semantic analysis keys
+/// on the inner compound statement's identity rather than the
+/// surrounding `Stmt` wrapper.
 #[derive(Clone, Debug)]
 pub enum Stmt {
     /// `{ ... }`
@@ -466,6 +488,8 @@ pub enum Stmt {
         expr: Option<Box<Expr>>,
         /// Span covering the expression and its `;`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `if (cond) then_branch [else else_branch]`
     If {
@@ -477,6 +501,8 @@ pub enum Stmt {
         else_branch: Option<Box<Stmt>>,
         /// Span from `if` to end of the else branch (or then branch).
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `while (cond) body`
     While {
@@ -486,6 +512,8 @@ pub enum Stmt {
         body: Box<Stmt>,
         /// Span from `while` to end of body.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `do body while (cond);`
     DoWhile {
@@ -495,6 +523,8 @@ pub enum Stmt {
         condition: Box<Expr>,
         /// Span from `do` to the `;`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `for (init; cond; update) body`
     For {
@@ -508,6 +538,8 @@ pub enum Stmt {
         body: Box<Stmt>,
         /// Span from `for` to end of body.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `switch (expr) body`
     Switch {
@@ -517,6 +549,8 @@ pub enum Stmt {
         body: Box<Stmt>,
         /// Span from `switch` to end of body.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `case value: body`
     Case {
@@ -526,6 +560,8 @@ pub enum Stmt {
         body: Box<Stmt>,
         /// Span from `case` to end of body.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `default: body`
     Default {
@@ -533,6 +569,8 @@ pub enum Stmt {
         body: Box<Stmt>,
         /// Span from `default` to end of body.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `return [expr];`
     Return {
@@ -540,16 +578,22 @@ pub enum Stmt {
         value: Option<Box<Expr>>,
         /// Span from `return` to `;`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `break;`
     Break {
         /// Span covering `break;`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `continue;`
     Continue {
         /// Span covering `continue;`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `goto label;`
     Goto {
@@ -557,6 +601,8 @@ pub enum Stmt {
         label: String,
         /// Span from `goto` to `;`.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `label: stmt`
     Label {
@@ -566,6 +612,8 @@ pub enum Stmt {
         stmt: Box<Stmt>,
         /// Span from the label to end of the labelled statement.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 }
 
@@ -594,6 +642,11 @@ pub struct StaticAssert {
 // =========================================================================
 
 /// A C17 expression.
+///
+/// Every variant carries a `node_id: NodeId` in addition to its
+/// `span: Span`.  The `NodeId` is the key semantic analysis will use
+/// to look up the expression's resolved type, implicit conversions,
+/// lvalue status, and similar side-table entries.
 #[derive(Clone, Debug)]
 pub enum Expr {
     // -- Literals --
@@ -605,6 +658,8 @@ pub enum Expr {
         suffix: IntSuffix,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// Floating-point literal: `3.14`, `1e10`, `0x1.8p1`.
     FloatLiteral {
@@ -614,6 +669,8 @@ pub enum Expr {
         suffix: FloatSuffix,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// Character literal: `'a'`, `L'\n'`.
     CharLiteral {
@@ -623,6 +680,8 @@ pub enum Expr {
         prefix: CharPrefix,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// String literal: `"hello"`, `u8"utf8"`.
     StringLiteral {
@@ -632,6 +691,8 @@ pub enum Expr {
         prefix: StringPrefix,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Names --
@@ -641,6 +702,8 @@ pub enum Expr {
         name: String,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Binary --
@@ -654,6 +717,8 @@ pub enum Expr {
         right: Box<Expr>,
         /// Span covering the entire expression.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Unary prefix --
@@ -665,6 +730,8 @@ pub enum Expr {
         operand: Box<Expr>,
         /// Span covering the entire expression.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Unary postfix --
@@ -676,6 +743,8 @@ pub enum Expr {
         operand: Box<Expr>,
         /// Span covering the entire expression.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Ternary --
@@ -689,6 +758,8 @@ pub enum Expr {
         else_expr: Box<Expr>,
         /// Span covering the entire expression.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Assignment --
@@ -702,6 +773,8 @@ pub enum Expr {
         value: Box<Expr>,
         /// Span covering the entire expression.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Postfix access --
@@ -713,6 +786,8 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Span covering the call.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// Member access: `obj.field` or `ptr->field`.
     MemberAccess {
@@ -724,6 +799,8 @@ pub enum Expr {
         is_arrow: bool,
         /// Span covering the access.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// Array subscript: `arr[idx]`.
     ArraySubscript {
@@ -733,6 +810,8 @@ pub enum Expr {
         index: Box<Expr>,
         /// Span covering the subscript.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Type-related --
@@ -744,6 +823,8 @@ pub enum Expr {
         expr: Box<Expr>,
         /// Span covering the cast.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `sizeof expr` (unparenthesised or parenthesised non-type).
     SizeofExpr {
@@ -751,6 +832,8 @@ pub enum Expr {
         expr: Box<Expr>,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `sizeof(type-name)`.
     SizeofType {
@@ -758,6 +841,8 @@ pub enum Expr {
         type_name: Box<TypeName>,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// `_Alignof(type-name)`.
     AlignofType {
@@ -765,6 +850,8 @@ pub enum Expr {
         type_name: Box<TypeName>,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
     /// Compound literal: `(int[]){1, 2, 3}`.
     CompoundLiteral {
@@ -774,6 +861,8 @@ pub enum Expr {
         initializer: Initializer,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- C11 --
@@ -785,6 +874,8 @@ pub enum Expr {
         associations: Vec<GenericAssociation>,
         /// Source span.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
 
     // -- Comma --
@@ -794,7 +885,58 @@ pub enum Expr {
         exprs: Vec<Expr>,
         /// Span covering the entire comma expression.
         span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
     },
+
+    // -- GNU builtins with type-name operands --
+    /// `__builtin_offsetof(type-name, member-designator)`.
+    ///
+    /// The designator is a non-empty chain starting with an identifier
+    /// and extended by `.field` / `[index]` steps, exactly mirroring the
+    /// shape in the source.  The type operand must resolve to a
+    /// struct/union at sema time; the subscript indices must be integer
+    /// constant expressions.
+    BuiltinOffsetof {
+        /// The aggregate type the offset is computed into.
+        ty: Box<TypeName>,
+        /// Designator chain starting from a leading field.
+        designator: Vec<OffsetofMember>,
+        /// Span covering the full `__builtin_offsetof(...)` invocation.
+        span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
+    },
+    /// `__builtin_types_compatible_p(type-a, type-b)`.
+    ///
+    /// Evaluates to `1` if the two (unqualified) types are compatible
+    /// per C17 §6.2.7, `0` otherwise.  The result is an integer
+    /// constant expression.
+    BuiltinTypesCompatibleP {
+        /// First type operand.
+        t1: Box<TypeName>,
+        /// Second type operand.
+        t2: Box<TypeName>,
+        /// Span covering the full `__builtin_types_compatible_p(...)`.
+        span: Span,
+        /// Parse-unique identifier used as a key in semantic side tables.
+        node_id: NodeId,
+    },
+}
+
+/// One step in a `__builtin_offsetof` member designator.
+///
+/// A designator chain looks like `head.sub[3].leaf` — the head is a
+/// [`Field`](OffsetofMember::Field), followed by any mix of
+/// [`Field`](OffsetofMember::Field) and
+/// [`Subscript`](OffsetofMember::Subscript) steps.
+#[derive(Clone, Debug)]
+pub enum OffsetofMember {
+    /// `.name` (or the leading bare identifier).
+    Field(String),
+    /// `[expr]` — the expression must be an integer constant expression,
+    /// enforced by sema rather than the parser.
+    Subscript(Box<Expr>),
 }
 
 /// One arm of a `_Generic` selection.
@@ -825,6 +967,8 @@ pub struct TypeName {
     pub abstract_declarator: Option<AbstractDeclarator>,
     /// Span covering the entire type-name.
     pub span: Span,
+    /// Parse-unique identifier used as a key in semantic side tables.
+    pub node_id: NodeId,
 }
 
 /// An abstract declarator: pointers and/or a direct abstract part, but

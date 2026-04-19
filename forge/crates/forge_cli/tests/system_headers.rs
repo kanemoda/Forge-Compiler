@@ -119,6 +119,48 @@ fn run_forge_parse_on_header(header: &str, tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Run `forge check` on an on-disk source file — exercises the full
+/// lex → preprocess → parse → sema pipeline and asserts zero errors.
+///
+/// Used by the Phase 4 acceptance gates that live in
+/// `tests/lit/sema/*.c`: each lit source file is a hand-written real
+/// program whose sema pass must complete cleanly before the phase can
+/// ship.
+fn run_forge_check_on_file(source_path: &std::path::Path) -> Result<(), String> {
+    let output = Command::new(FORGE_BIN)
+        .arg("check")
+        .arg(source_path)
+        .output()
+        .map_err(|e| format!("spawn failed: {e}"))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "forge check {} exited {}\n--- stderr (head) ---\n{}\n--- stdout (head) ---\n{}",
+            source_path.display(),
+            output.status,
+            stderr.chars().take(4_000).collect::<String>(),
+            stdout.chars().take(1_000).collect::<String>()
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve a path under the workspace's `tests/lit/` tree.  The cargo
+/// test harness sets `CARGO_MANIFEST_DIR` to the crate root
+/// (`forge/crates/forge_cli`), so the workspace top is two levels up.
+fn lit_source(relative: &str) -> PathBuf {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .join("tests")
+        .join("lit")
+        .join(relative)
+}
+
 // ---------------------------------------------------------------------------
 // One test per canonical C17 system header
 // ---------------------------------------------------------------------------
@@ -482,4 +524,46 @@ int main(void) {
         stdout.contains("main"),
         "printed AST lacks the `main` declarator name"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 sema acceptance gates — real-world lit sources
+// ---------------------------------------------------------------------------
+
+/// Drives the whole lex → preprocess → parse → sema pipeline against a
+/// hand-written program that exercises multiple structs (one self-
+/// referential), an enum with explicit values, a function-pointer
+/// typedef in a struct, array-of-struct designated initializers,
+/// pointer arithmetic, compatible pointer casts, `sizeof` and
+/// `_Alignof` used as array dimensions, a switch with five cases plus
+/// default, a for-loop with a comma expression in its update, a
+/// variadic prototype and call, and `_Static_assert` at both file and
+/// block scope.  The Phase 4 exit criterion is that this file passes
+/// sema with zero errors.
+#[test]
+fn realworld_sema_acceptance_passes_cleanly() {
+    let src = lit_source("sema/realworld.c");
+    assert!(src.exists(), "missing lit source at {}", src.display());
+    if let Err(e) = run_forge_check_on_file(&src) {
+        panic!("{e}");
+    }
+}
+
+/// Extended system-header smoke test that pulls in eight canonical C17
+/// library headers (`stdio`, `stdlib`, `string`, `stdint`, `stddef`,
+/// `ctype`, `errno`, `time`) and calls at least one function from each,
+/// so sema must walk every prototype the host libc exposes through
+/// them.  Skipped on hosts without a detectable toolchain because the
+/// preprocessor can not resolve `#include <...>` without real headers.
+#[test]
+fn extended_system_headers_pass_sema_cleanly() {
+    if !host_has_system_headers() {
+        eprintln!("skipping: no toolchain detected on host");
+        return;
+    }
+    let src = lit_source("sema/headers_smoke_extended.c");
+    assert!(src.exists(), "missing lit source at {}", src.display());
+    if let Err(e) = run_forge_check_on_file(&src) {
+        panic!("{e}");
+    }
 }

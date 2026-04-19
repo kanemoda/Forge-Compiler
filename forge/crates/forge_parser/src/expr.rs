@@ -128,6 +128,7 @@ impl Parser {
                     value,
                     suffix,
                     span: tok.span,
+                    node_id: self.next_id(),
                 }
             }
 
@@ -139,6 +140,7 @@ impl Parser {
                     value,
                     suffix,
                     span: tok.span,
+                    node_id: self.next_id(),
                 }
             }
 
@@ -150,6 +152,7 @@ impl Parser {
                     value,
                     prefix,
                     span: tok.span,
+                    node_id: self.next_id(),
                 }
             }
 
@@ -165,6 +168,7 @@ impl Parser {
                 Expr::Ident {
                     name,
                     span: tok.span,
+                    node_id: self.next_id(),
                 }
             }
 
@@ -179,6 +183,7 @@ impl Parser {
                     op: UnaryOp::PreIncrement,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::MinusMinus => {
@@ -188,6 +193,7 @@ impl Parser {
                     op: UnaryOp::PreDecrement,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Ampersand => {
@@ -197,6 +203,7 @@ impl Parser {
                     op: UnaryOp::AddrOf,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Star => {
@@ -206,6 +213,7 @@ impl Parser {
                     op: UnaryOp::Deref,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Plus => {
@@ -215,6 +223,7 @@ impl Parser {
                     op: UnaryOp::Plus,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Minus => {
@@ -224,6 +233,7 @@ impl Parser {
                     op: UnaryOp::Minus,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Tilde => {
@@ -233,6 +243,7 @@ impl Parser {
                     op: UnaryOp::BitNot,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
             TokenKind::Bang => {
@@ -242,6 +253,7 @@ impl Parser {
                     op: UnaryOp::LogNot,
                     span: self.span_from(tok.span),
                     operand: Box::new(operand),
+                    node_id: self.next_id(),
                 }
             }
 
@@ -269,6 +281,7 @@ impl Parser {
                     value: 0,
                     suffix: IntSuffix::None,
                     span: tok.span,
+                    node_id: self.next_id(),
                 }
             }
         }
@@ -299,6 +312,7 @@ impl Parser {
                             type_name: Box::new(tn),
                             initializer: init,
                             span: self.span_from(start),
+                            node_id: self.next_id(),
                         };
                     }
 
@@ -308,6 +322,7 @@ impl Parser {
                         type_name: Box::new(tn),
                         expr: Box::new(operand),
                         span: self.span_from(start),
+                        node_id: self.next_id(),
                     };
                 }
             }
@@ -345,6 +360,7 @@ impl Parser {
                         return Expr::SizeofType {
                             type_name: Box::new(tn),
                             span: self.span_from(start),
+                            node_id: self.next_id(),
                         };
                     }
                 }
@@ -357,6 +373,7 @@ impl Parser {
         Expr::SizeofExpr {
             expr: Box::new(operand),
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -373,6 +390,7 @@ impl Parser {
         Expr::AlignofType {
             type_name: Box::new(tn),
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -423,6 +441,7 @@ impl Parser {
             controlling: Box::new(controlling),
             associations,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -454,6 +473,7 @@ impl Parser {
             value,
             prefix: first_prefix,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -520,6 +540,7 @@ impl Parser {
         Initializer::List {
             items,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -541,6 +562,7 @@ impl Parser {
                     callee: Box::new(lhs.clone()),
                     args,
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 })
             }
 
@@ -553,6 +575,7 @@ impl Parser {
                     array: Box::new(lhs.clone()),
                     index: Box::new(index),
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 })
             }
 
@@ -572,6 +595,7 @@ impl Parser {
                     member,
                     is_arrow: false,
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 })
             }
 
@@ -591,6 +615,7 @@ impl Parser {
                     member,
                     is_arrow: true,
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 })
             }
 
@@ -601,6 +626,7 @@ impl Parser {
                     op: PostfixOp::PostIncrement,
                     operand: Box::new(lhs.clone()),
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 })
             }
 
@@ -611,6 +637,7 @@ impl Parser {
                     op: PostfixOp::PostDecrement,
                     operand: Box::new(lhs.clone()),
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 })
             }
 
@@ -712,6 +739,7 @@ impl Parser {
                     left: Box::new(lhs),
                     right: Box::new(rhs),
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 }
             }
 
@@ -722,6 +750,7 @@ impl Parser {
                     target: Box::new(lhs),
                     value: Box::new(rhs),
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 }
             }
 
@@ -735,6 +764,7 @@ impl Parser {
                     then_expr: Box::new(then_expr),
                     else_expr: Box::new(else_expr),
                     span: self.span_from(start),
+                    node_id: self.next_id(),
                 }
             }
 
@@ -749,6 +779,7 @@ impl Parser {
                 Expr::Comma {
                     span: self.span_from(start),
                     exprs,
+                    node_id: self.next_id(),
                 }
             }
         }
@@ -760,67 +791,111 @@ impl Parser {
 
     /// Parse `__builtin_offsetof(type-name, member-designator)`.
     ///
-    /// The member designator is a field chain (`.a.b[3].c`) which we
-    /// tolerantly consume up to the matching `)` rather than parsing
-    /// precisely — Phase 4+ will reify it if needed.  Returns an
-    /// `IntLiteral(0)` placeholder: semantically wrong but syntactically
-    /// valid, sufficient for type-compat checks in system headers.
+    /// The designator is `ident ('.' ident | '[' expr ']')*`; the
+    /// leading field is a bare identifier, not a dot-prefixed one.
+    /// Subscript indices must be integer constant expressions — that
+    /// requirement is enforced by sema, not here.
+    ///
+    /// *(Phase 4 follow-up: the prior implementation tolerantly
+    /// consumed the designator and returned `IntLiteral(0)`; the real
+    /// [`Expr::BuiltinOffsetof`] AST landed here so sema can compute
+    /// the offset.)*
     fn parse_builtin_offsetof(&mut self) -> Expr {
         let kw = self.advance(); // `__builtin_offsetof`
         let start = kw.span;
         let _ = self.expect(&TokenKind::LeftParen);
-        let _ = self.parse_type_name();
+        let ty = self.parse_type_name().unwrap_or_else(|| {
+            self.error(
+                "expected type-name in `__builtin_offsetof`",
+                self.peek().span,
+            );
+            self.dummy_type_name()
+        });
         let _ = self.expect(&TokenKind::Comma);
 
-        // Consume the member designator up to the matching `)`.
-        let mut depth: u32 = 1;
-        while !self.at_eof() {
-            match &self.peek().kind {
-                TokenKind::LeftParen | TokenKind::LeftBracket => {
-                    depth += 1;
-                    self.advance();
-                }
-                TokenKind::RightBracket => {
-                    depth -= 1;
-                    self.advance();
-                }
-                TokenKind::RightParen => {
-                    if depth == 1 {
-                        break;
-                    }
-                    depth -= 1;
-                    self.advance();
-                }
-                _ => {
-                    self.advance();
-                }
+        let mut designator: Vec<OffsetofMember> = Vec::new();
+        match &self.peek().kind {
+            TokenKind::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                designator.push(OffsetofMember::Field(name));
+            }
+            _ => {
+                let span = self.peek().span;
+                self.error("expected identifier in offsetof designator", span);
             }
         }
+
+        loop {
+            match &self.peek().kind {
+                TokenKind::Dot => {
+                    self.advance();
+                    match &self.peek().kind {
+                        TokenKind::Identifier(name) => {
+                            let name = name.clone();
+                            self.advance();
+                            designator.push(OffsetofMember::Field(name));
+                        }
+                        _ => {
+                            let span = self.peek().span;
+                            self.error(
+                                "expected identifier after '.' in offsetof designator",
+                                span,
+                            );
+                            break;
+                        }
+                    }
+                }
+                TokenKind::LeftBracket => {
+                    self.advance();
+                    let idx = self.parse_expr();
+                    let _ = self.expect(&TokenKind::RightBracket);
+                    designator.push(OffsetofMember::Subscript(Box::new(idx)));
+                }
+                _ => break,
+            }
+        }
+
         let _ = self.expect(&TokenKind::RightParen);
-        Expr::IntLiteral {
-            value: 0,
-            suffix: IntSuffix::None,
+        Expr::BuiltinOffsetof {
+            ty: Box::new(ty),
+            designator,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
     /// Parse `__builtin_types_compatible_p(type-a, type-b)`.
     ///
-    /// Both arguments are type-names.  Returns an `IntLiteral(0)`
-    /// placeholder — the real result depends on the types and is
-    /// resolved by sema (if/when the builtin is lowered).
+    /// *(Phase 4 follow-up: the prior implementation discarded the
+    /// parsed types and returned `IntLiteral(0)`; the dedicated
+    /// [`Expr::BuiltinTypesCompatibleP`] AST lets sema perform the
+    /// real compatibility check.)*
     fn parse_builtin_types_compatible_p(&mut self) -> Expr {
         let kw = self.advance(); // `__builtin_types_compatible_p`
         let start = kw.span;
         let _ = self.expect(&TokenKind::LeftParen);
-        let _ = self.parse_type_name();
+        let t1 = self.parse_type_name().unwrap_or_else(|| {
+            self.error(
+                "expected first type-name in `__builtin_types_compatible_p`",
+                self.peek().span,
+            );
+            self.dummy_type_name()
+        });
         let _ = self.expect(&TokenKind::Comma);
-        let _ = self.parse_type_name();
+        let t2 = self.parse_type_name().unwrap_or_else(|| {
+            self.error(
+                "expected second type-name in `__builtin_types_compatible_p`",
+                self.peek().span,
+            );
+            self.dummy_type_name()
+        });
         let _ = self.expect(&TokenKind::RightParen);
-        Expr::IntLiteral {
-            value: 0,
-            suffix: IntSuffix::None,
+        Expr::BuiltinTypesCompatibleP {
+            t1: Box::new(t1),
+            t2: Box::new(t2),
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -844,6 +919,7 @@ impl Parser {
             value: 0,
             suffix: IntSuffix::None,
             span: self.span_from(start),
+            node_id: self.next_id(),
         }
     }
 
@@ -852,8 +928,9 @@ impl Parser {
     // =================================================================
 
     /// Build a dummy `TypeName` for error recovery.
-    pub(crate) fn dummy_type_name(&self) -> TypeName {
+    pub(crate) fn dummy_type_name(&mut self) -> TypeName {
         let span = self.peek().span;
+        let node_id = self.next_id();
         TypeName {
             specifiers: DeclSpecifiers {
                 storage_class: None,
@@ -866,6 +943,7 @@ impl Parser {
             },
             abstract_declarator: None,
             span,
+            node_id,
         }
     }
 }
@@ -909,6 +987,8 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::AlignofType { span, .. }
         | Expr::CompoundLiteral { span, .. }
         | Expr::GenericSelection { span, .. }
-        | Expr::Comma { span, .. } => *span,
+        | Expr::Comma { span, .. }
+        | Expr::BuiltinOffsetof { span, .. }
+        | Expr::BuiltinTypesCompatibleP { span, .. } => *span,
     }
 }

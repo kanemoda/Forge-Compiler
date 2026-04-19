@@ -116,15 +116,25 @@ enum Command {
 
     /// Check a C source file for errors without producing an executable.
     ///
-    /// `check` runs the full lex + preprocess + parse pipeline, prints
-    /// every post-preprocessor token to stdout in
+    /// `check` runs the full lex + preprocess + parse + sema pipeline,
+    /// prints every post-preprocessor token to stdout in
     /// `KIND span=START..END 'text'` form, and finishes with a
     /// `preprocessing successful, N tokens` summary line so test
     /// harnesses can assert on the token count.
+    ///
+    /// With `--dump-types`, a second summary block is appended that
+    /// lists every resolved type in AST-node order.  Intended for
+    /// debugging and the lit-style sema test suite — the format is
+    /// **not** stable.
     Check {
         /// The C source file to check.
         #[arg(value_name = "FILE")]
         file: PathBuf,
+
+        /// After the token dump, emit a `TYPE node_id=N <rendered>`
+        /// line for every AST node sema attached a type to.
+        #[arg(long = "dump-types")]
+        dump_types: bool,
     },
 
     /// Parse a C source file and dump the resulting AST.
@@ -146,12 +156,15 @@ enum Command {
 enum Mode {
     /// `-E`: write reconstructed preprocessed source to stdout.
     Preprocess,
-    /// `check`: lex + preprocess + parse, emit the token stream.
-    Check,
+    /// `check`: lex + preprocess + parse + sema, emit the token stream.
+    Check {
+        /// `check --dump-types`: append a block of per-node resolved types.
+        dump_types: bool,
+    },
     /// `parse`: lex + preprocess + parse, dump the AST tree.
     Parse,
     /// `build` (or default when a file is given with no `-E`): full
-    /// pipeline — currently no-op past the parser.
+    /// pipeline — currently no-op past sema.
     Build,
 }
 
@@ -178,11 +191,14 @@ fn main() {
     }
 
     // `-E` stops at the preprocessor so parser diagnostics do not fire
-    // on preprocessor-only probes; every other mode runs the full
-    // front-end so `check` / `parse` / `build` all see parse errors.
+    // on preprocessor-only probes; `parse` stops after parse so the
+    // AST dump is unaffected by (still rough) sema diagnostics; every
+    // other mode runs the full front-end so `check` / `build` also
+    // surface sema errors.
     let stage = match mode {
         Mode::Preprocess => CompileStage::Preprocess,
-        Mode::Check | Mode::Parse | Mode::Build => CompileStage::Parse,
+        Mode::Parse => CompileStage::Parse,
+        Mode::Check { .. } | Mode::Build => CompileStage::Sema,
     };
 
     let options = CompileOptions {
@@ -213,12 +229,20 @@ fn resolve_invocation(cli: &Cli) -> Result<(PathBuf, Mode, Option<PathBuf>), Str
             Ok((file.clone(), Mode::Build, Some(output.clone())))
         }
         (
-            Some(Command::Build { file, .. } | Command::Check { file } | Command::Parse { file }),
+            Some(
+                Command::Build { file, .. } | Command::Check { file, .. } | Command::Parse { file },
+            ),
             None,
             true,
         )
         | (None, Some(file), true) => Ok((file.clone(), Mode::Preprocess, None)),
-        (Some(Command::Check { file }), None, false) => Ok((file.clone(), Mode::Check, None)),
+        (Some(Command::Check { file, dump_types }), None, false) => Ok((
+            file.clone(),
+            Mode::Check {
+                dump_types: *dump_types,
+            },
+            None,
+        )),
         (Some(Command::Parse { file }), None, false) => Ok((file.clone(), Mode::Parse, None)),
         (None, Some(file), false) => Ok((file.clone(), Mode::Build, None)),
         (Some(_), Some(_), _) => Err("cannot combine a positional FILE with a subcommand; \
@@ -274,7 +298,7 @@ fn run_compile(file: &Path, mode: Mode, options: &CompileOptions, _build_output:
             // appends a trailing newline when the stream is non-empty.
             print!("{}", tokens_to_source(&output.tokens));
         }
-        Mode::Check => {
+        Mode::Check { dump_types } => {
             for tok in &output.tokens {
                 println!("{}", format_token(&output.effective_source, tok));
             }
@@ -284,6 +308,9 @@ fn run_compile(file: &Path, mode: Mode, options: &CompileOptions, _build_output:
                 .filter(|t| !matches!(t.kind, TokenKind::Eof))
                 .count();
             println!("preprocessing successful, {token_count} tokens");
+            if dump_types {
+                print!("{}", dump_sema_types(&output));
+            }
         }
         Mode::Parse => {
             if let Some(ast) = &output.ast {
@@ -301,4 +328,22 @@ fn run_compile(file: &Path, mode: Mode, options: &CompileOptions, _build_output:
     if output.has_errors() {
         process::exit(1);
     }
+}
+
+/// Render every resolved expression type from the sema side table as one
+/// `TYPE node_id=N <qualtype>` line per entry, in ascending node id.
+///
+/// Returns an empty string when sema did not run (e.g. the input was
+/// rejected earlier or the caller asked for a non-sema stage).
+fn dump_sema_types(output: &CompileOutput) -> String {
+    let Some(sema) = output.sema.as_ref() else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for (idx, slot) in sema.expr_types.iter().enumerate() {
+        if let Some(qt) = slot {
+            out.push_str(&format!("TYPE node_id={idx} {qt}\n"));
+        }
+    }
+    out
 }

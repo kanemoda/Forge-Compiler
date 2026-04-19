@@ -7,9 +7,13 @@ use forge_lexer::{IntSuffix, Span};
 
 use crate::ast::*;
 use crate::ast_ops::*;
+use crate::node_id::NodeId;
 
 /// Helper: a zero-length span for synthetic nodes.
 const S: Span = Span::new(0, 0);
+
+/// Helper: dummy node id for hand-built AST nodes.
+const N: NodeId = NodeId::DUMMY;
 
 /// Helper: empty `DeclSpecifiers` with only `type_specifiers` filled.
 fn specs(ts: Vec<TypeSpecifierToken>) -> DeclSpecifiers {
@@ -35,8 +39,10 @@ fn function_def_int_main_return_zero() {
             value: 0,
             suffix: IntSuffix::None,
             span: S,
+            node_id: N,
         })),
         span: S,
+        node_id: N,
     };
 
     let func = FunctionDef {
@@ -56,6 +62,7 @@ fn function_def_int_main_return_zero() {
             span: S,
         },
         span: S,
+        node_id: N,
     };
 
     let tu = TranslationUnit {
@@ -90,10 +97,13 @@ fn declaration_unsigned_long_long_is_vec() {
                 value: 42,
                 suffix: IntSuffix::None,
                 span: S,
+                node_id: N,
             }))),
             span: S,
+            node_id: N,
         }],
         span: S,
+        node_id: N,
     };
 
     // Verify it really is a Vec with four entries.
@@ -111,12 +121,15 @@ fn expr_add_mul_nesting() {
         left: Box::new(Expr::Ident {
             name: "b".into(),
             span: S,
+            node_id: N,
         }),
         right: Box::new(Expr::Ident {
             name: "c".into(),
             span: S,
+            node_id: N,
         }),
         span: S,
+        node_id: N,
     };
 
     let a_plus_bc = Expr::BinaryOp {
@@ -124,9 +137,11 @@ fn expr_add_mul_nesting() {
         left: Box::new(Expr::Ident {
             name: "a".into(),
             span: S,
+            node_id: N,
         }),
         right: Box::new(b_times_c),
         span: S,
+        node_id: N,
     };
 
     // Check the outer node is Add.
@@ -158,10 +173,12 @@ fn struct_def_with_bit_field() {
                     value: 1,
                     suffix: IntSuffix::None,
                     span: S,
+                    node_id: N,
                 })),
                 span: S,
             }],
             span: S,
+            node_id: N,
         })]),
         attributes: Vec::new(),
         span: S,
@@ -182,6 +199,7 @@ fn struct_member_static_assert_variant_exists() {
             value: 1,
             suffix: IntSuffix::None,
             span: S,
+            node_id: N,
         }),
         message: Some("size check".into()),
         span: S,
@@ -203,8 +221,10 @@ fn stmt_expr_has_span() {
         expr: Some(Box::new(Expr::Ident {
             name: "x".into(),
             span: S,
+            node_id: N,
         })),
         span: Span::new(10, 12),
+        node_id: N,
     };
 
     if let Stmt::Expr { span, .. } = &stmt {
