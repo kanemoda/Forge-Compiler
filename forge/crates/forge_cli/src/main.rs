@@ -289,7 +289,7 @@ fn run_compile(file: &Path, mode: Mode, options: &CompileOptions, _build_output:
     let output: CompileOutput = compile(&filename, &source, options);
 
     if !output.diagnostics.is_empty() {
-        render_diagnostics(&output.source_map, &output.diagnostics);
+        render_diagnostics(&output.source_map, &output.expansions, &output.diagnostics);
     }
 
     match mode {

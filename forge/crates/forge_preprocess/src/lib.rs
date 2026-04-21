@@ -118,7 +118,9 @@ pub use system_includes::detect_system_include_paths;
 
 // Re-export diagnostic/token types downstream crates will almost always
 // want alongside the preprocessor API.
-pub use forge_diagnostics::{Diagnostic, FileId, Severity, SourceMap};
+pub use forge_diagnostics::{
+    Diagnostic, ExpansionFrame, ExpansionId, ExpansionTable, FileId, Severity, SourceMap,
+};
 pub use forge_lexer::{Token, TokenKind};
 
 #[cfg(test)]

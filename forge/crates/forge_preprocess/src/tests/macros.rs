@@ -19,6 +19,7 @@ fn define_stores_an_object_like_macro() {
             name,
             replacement,
             is_predefined,
+            ..
         } => {
             assert_eq!(name, "FOO");
             assert!(!is_predefined);
@@ -54,6 +55,7 @@ fn define_stores_a_function_like_macro_when_paren_has_no_leading_space() {
             params,
             is_variadic,
             replacement,
+            ..
         } => {
             assert_eq!(name, "ADD");
             assert_eq!(params, &vec!["a".to_string(), "b".to_string()]);

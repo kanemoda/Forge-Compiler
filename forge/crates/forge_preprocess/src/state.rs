@@ -36,6 +36,12 @@ pub enum MacroDef {
         /// line.  Whitespace between replacement tokens is carried on each
         /// token's [`Token::has_leading_space`] flag.
         replacement: Vec<Token>,
+        /// Span of the macro name token at the `#define` site.  Used by
+        /// [`crate::ExpansionFrame::definition_span`] so a "defined here"
+        /// note can point at the original declaration.  Predefined
+        /// macros carry a synthetic [`forge_diagnostics::FileId::INVALID`]
+        /// span.
+        define_span: Span,
         /// `true` if this macro is one the compiler itself synthesises —
         /// `__FILE__`, `__LINE__`, `__DATE__`, etc.  Predefined macros
         /// get special handling during expansion (e.g. `__LINE__` must
@@ -56,6 +62,9 @@ pub enum MacroDef {
         is_variadic: bool,
         /// The replacement list.  See [`ObjectLike::replacement`].
         replacement: Vec<Token>,
+        /// Span of the macro name token at the `#define` site.  See
+        /// [`ObjectLike::define_span`](MacroDef::ObjectLike) for details.
+        define_span: Span,
     },
 }
 
@@ -72,6 +81,14 @@ impl MacroDef {
         match self {
             MacroDef::ObjectLike { replacement, .. }
             | MacroDef::FunctionLike { replacement, .. } => replacement,
+        }
+    }
+
+    /// Span of the macro's `#define` declaration, regardless of kind.
+    pub fn define_span(&self) -> Span {
+        match self {
+            MacroDef::ObjectLike { define_span, .. }
+            | MacroDef::FunctionLike { define_span, .. } => *define_span,
         }
     }
 
@@ -307,11 +324,18 @@ mod tests {
         toks
     }
 
+    /// Placeholder define-site span — the equivalence checks and
+    /// accessor tests don't care where the macro was declared.
+    fn dspan() -> Span {
+        Span::new(FileId::INVALID, 0, 0)
+    }
+
     #[test]
     fn object_like_accessors_report_the_name_and_replacement() {
         let m = MacroDef::ObjectLike {
             name: "FOO".into(),
             replacement: lex_body("42"),
+            define_span: dspan(),
             is_predefined: false,
         };
         assert_eq!(m.name(), "FOO");
@@ -327,6 +351,7 @@ mod tests {
             params: vec!["x".into(), "y".into()],
             is_variadic: true,
             replacement: lex_body("x + y"),
+            define_span: dspan(),
         };
         assert_eq!(m.name(), "F");
         assert!(m.is_function_like());
@@ -338,11 +363,13 @@ mod tests {
         let a = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("1 + 2"),
+            define_span: dspan(),
             is_predefined: false,
         };
         let b = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("1 + 2"),
+            define_span: dspan(),
             is_predefined: false,
         };
         assert!(macros_equivalent(&a, &b));
@@ -353,11 +380,13 @@ mod tests {
         let a = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("1 + 2"),
+            define_span: dspan(),
             is_predefined: false,
         };
         let b = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("1    +    2"),
+            define_span: dspan(),
             is_predefined: false,
         };
         assert!(macros_equivalent(&a, &b));
@@ -368,11 +397,13 @@ mod tests {
         let a = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("1"),
+            define_span: dspan(),
             is_predefined: false,
         };
         let b = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("2"),
+            define_span: dspan(),
             is_predefined: false,
         };
         assert!(!macros_equivalent(&a, &b));
@@ -383,6 +414,7 @@ mod tests {
         let a = MacroDef::ObjectLike {
             name: "X".into(),
             replacement: lex_body("1"),
+            define_span: dspan(),
             is_predefined: false,
         };
         let b = MacroDef::FunctionLike {
@@ -390,6 +422,7 @@ mod tests {
             params: vec![],
             is_variadic: false,
             replacement: lex_body("1"),
+            define_span: dspan(),
         };
         assert!(!macros_equivalent(&a, &b));
     }
@@ -401,12 +434,14 @@ mod tests {
             params: vec!["x".into()],
             is_variadic: false,
             replacement: lex_body("x"),
+            define_span: dspan(),
         };
         let b = MacroDef::FunctionLike {
             name: "F".into(),
             params: vec!["y".into()],
             is_variadic: false,
             replacement: lex_body("x"),
+            define_span: dspan(),
         };
         assert!(!macros_equivalent(&a, &b));
     }
@@ -418,12 +453,14 @@ mod tests {
             params: vec!["x".into()],
             is_variadic: false,
             replacement: lex_body("x"),
+            define_span: dspan(),
         };
         let b = MacroDef::FunctionLike {
             name: "F".into(),
             params: vec!["x".into()],
             is_variadic: true,
             replacement: lex_body("x"),
+            define_span: dspan(),
         };
         assert!(!macros_equivalent(&a, &b));
     }

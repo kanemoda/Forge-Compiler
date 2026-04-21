@@ -51,7 +51,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-pub use forge_diagnostics::{Diagnostic, FileId, Severity, SourceMap};
+pub use forge_diagnostics::{Diagnostic, ExpansionTable, FileId, Severity, SourceMap};
 pub use forge_lexer::{Lexer, Token, TokenKind};
 pub use forge_parser::printer::print_ast;
 pub use forge_parser::{Parser, TranslationUnit};
@@ -259,6 +259,13 @@ pub struct CompileOutput {
     /// [`render_diagnostics`](forge_diagnostics::render_diagnostics) so
     /// multi-file spans render against the correct file.
     pub source_map: SourceMap,
+    /// Registry of every macro expansion the preprocessor performed,
+    /// keyed by the [`ExpansionId`](forge_diagnostics::ExpansionId)
+    /// embedded in each synthesized token's span.  Passed to
+    /// [`render_diagnostics`](forge_diagnostics::render_diagnostics) so a
+    /// diagnostic against an expansion-produced token can walk the
+    /// invocation chain and render an "in expansion of macro X" trail.
+    pub expansions: ExpansionTable,
 }
 
 impl CompileOutput {
@@ -382,7 +389,7 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
         _ => (None, None),
     };
 
-    let source_map = pp.into_source_map();
+    let (source_map, expansions) = pp.into_source_map_and_expansions();
     CompileOutput {
         tokens: pp_tokens,
         ast,
@@ -391,6 +398,7 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
         diagnostics,
         effective_source,
         source_map,
+        expansions,
     }
 }
 

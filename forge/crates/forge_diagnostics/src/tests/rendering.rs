@@ -1,11 +1,15 @@
 //! Ariadne-backed rendering of [`crate::Diagnostic`] values.
 
-use crate::{render_diagnostics_to_string, Diagnostic, SourceMap, Span};
+use crate::{render_diagnostics_to_string, Diagnostic, ExpansionTable, SourceMap, Span};
 
 fn sm(name: &str, src: &str) -> SourceMap {
     let mut sm = SourceMap::new();
     sm.add_file(name.to_string(), src.to_string());
     sm
+}
+
+fn empty_expansions() -> ExpansionTable {
+    ExpansionTable::new()
 }
 
 /// Core demonstration test: a C source with a missing semicolon produces
@@ -21,7 +25,7 @@ fn test_render_missing_semicolon() {
         .label("expected ';' here")
         .note("every statement in C must end with a semicolon");
 
-    let rendered = render_diagnostics_to_string(&source_map, &[diag]);
+    let rendered = render_diagnostics_to_string(&source_map, &empty_expansions(), &[diag]);
 
     assert!(
         rendered.contains("expected ';' after return statement"),
@@ -46,7 +50,7 @@ fn test_render_to_string_is_plain_text() {
     let source = "int x = ;";
     let source_map = sm("test.c", source);
     let diag = Diagnostic::error("expected expression").span(Span::primary(8, 9));
-    let rendered = render_diagnostics_to_string(&source_map, &[diag]);
+    let rendered = render_diagnostics_to_string(&source_map, &empty_expansions(), &[diag]);
 
     assert!(
         !rendered.contains('\x1b'),
@@ -66,7 +70,7 @@ fn test_render_multiple_diagnostics() {
             .span(Span::primary(18, 19))
             .label("expected expression here"),
     ];
-    let rendered = render_diagnostics_to_string(&source_map, &diagnostics);
+    let rendered = render_diagnostics_to_string(&source_map, &empty_expansions(), &diagnostics);
     assert!(
         rendered.matches("expected expression after '='").count() >= 2,
         "expected at least two occurrences of the error message:\n{rendered}"

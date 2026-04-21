@@ -46,9 +46,39 @@ use std::ops::Range;
 
 use ariadne::{Cache, Color, Config, Label as AriadneLabel, Report, ReportKind, Source};
 
+pub mod expansion;
 pub mod source_map;
 
+pub use expansion::{ExpansionFrame, ExpansionTable};
 pub use source_map::{FileId, SourceFile, SourceMap};
+
+// ---------------------------------------------------------------------------
+// ExpansionId
+// ---------------------------------------------------------------------------
+
+/// Index into a preprocessor-owned expansion table.
+///
+/// A [`Span`] whose `expanded_from` is not [`ExpansionId::NONE`] was
+/// produced by a macro expansion; the id points at the innermost
+/// expansion frame that stamped it.  Walking the frame's `parent` chain
+/// yields the enclosing invocations, in innermost-to-outermost order.
+///
+/// The concrete frame table (`ExpansionTable`) lives in
+/// `forge_preprocess` — this crate only carries the id so that `Span`
+/// can reference expansions without forcing `forge_lexer` (which does
+/// not know about macros) to depend on the preprocessor.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct ExpansionId(pub u32);
+
+impl ExpansionId {
+    /// Sentinel meaning "this span was not produced by macro expansion".
+    pub const NONE: ExpansionId = ExpansionId(u32::MAX);
+
+    /// Whether this id names a real frame (i.e. is not [`Self::NONE`]).
+    pub const fn is_some(self) -> bool {
+        self.0 != Self::NONE.0
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Span
@@ -60,6 +90,10 @@ pub use source_map::{FileId, SourceFile, SourceMap};
 /// and diagnostics layers. It lives in `forge_diagnostics` (and is
 /// re-exported from `forge_lexer`) so every crate above the lexer sees
 /// the same representation.
+///
+/// In addition to the (file, start, end) triple, a span carries an
+/// [`ExpansionId`] naming the macro expansion the token came from — or
+/// [`ExpansionId::NONE`] for tokens lexed straight from the source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Span {
     /// The file this span points into.
@@ -68,18 +102,36 @@ pub struct Span {
     pub start: u32,
     /// Exclusive end byte offset.
     pub end: u32,
+    /// The expansion that produced this token, or [`ExpansionId::NONE`]
+    /// for tokens that came directly from the source.
+    pub expanded_from: ExpansionId,
 }
 
 impl Span {
-    /// Build a span pointing into the given file.
+    /// Build a span pointing into the given file.  `expanded_from` is
+    /// initialised to [`ExpansionId::NONE`]; use
+    /// [`Span::with_expansion`] to stamp an expansion id.
     pub const fn new(file: FileId, start: u32, end: u32) -> Self {
-        Self { file, start, end }
+        Self {
+            file,
+            start,
+            end,
+            expanded_from: ExpansionId::NONE,
+        }
     }
 
     /// Convenience for tests and single-file fixtures: build a span in
     /// the primary (first) file of a `SourceMap`.
     pub const fn primary(start: u32, end: u32) -> Self {
         Self::new(FileId::PRIMARY, start, end)
+    }
+
+    /// Return `self` with the given expansion id attached.  Chainable
+    /// with the other constructors so call sites can write
+    /// `Span::new(f, a, b).with_expansion(id)`.
+    pub const fn with_expansion(mut self, id: ExpansionId) -> Self {
+        self.expanded_from = id;
+        self
     }
 
     /// Byte length of the span.
@@ -215,23 +267,39 @@ impl Diagnostic {
 // ---------------------------------------------------------------------------
 
 /// Render a slice of diagnostics to **stderr** using the given
-/// [`SourceMap`] as the lookup table for file names and source text.
+/// [`SourceMap`] as the lookup table for file names and source text,
+/// and the given [`ExpansionTable`] to resolve macro backtrace
+/// information for tokens that came from an expansion.
 ///
 /// ANSI colour codes are emitted only when stderr is attached to a
 /// terminal.
-pub fn render_diagnostics(source_map: &SourceMap, diagnostics: &[Diagnostic]) {
+pub fn render_diagnostics(
+    source_map: &SourceMap,
+    expansions: &ExpansionTable,
+    diagnostics: &[Diagnostic],
+) {
     let use_color = std::io::stderr().is_terminal();
     for diag in diagnostics {
-        write_report(diag, source_map, &mut std::io::stderr(), use_color)
-            .expect("failed to write diagnostic to stderr");
+        write_report(
+            diag,
+            source_map,
+            expansions,
+            &mut std::io::stderr(),
+            use_color,
+        )
+        .expect("failed to write diagnostic to stderr");
     }
 }
 
 /// Render a slice of diagnostics to a [`String`] without ANSI colour codes.
-pub fn render_diagnostics_to_string(source_map: &SourceMap, diagnostics: &[Diagnostic]) -> String {
+pub fn render_diagnostics_to_string(
+    source_map: &SourceMap,
+    expansions: &ExpansionTable,
+    diagnostics: &[Diagnostic],
+) -> String {
     let mut buf: Vec<u8> = Vec::new();
     for diag in diagnostics {
-        write_report(diag, source_map, &mut buf, false)
+        write_report(diag, source_map, expansions, &mut buf, false)
             .expect("failed to write diagnostic to buffer");
     }
     String::from_utf8(buf).unwrap_or_default()
@@ -275,9 +343,16 @@ impl Cache<FileId> for SourceMapCache<'_> {
 }
 
 /// Core rendering helper shared by the public render functions.
+///
+/// When `diag.span.expanded_from` names an expansion frame, the frame's
+/// invocation span (and every ancestor frame along the parent chain) is
+/// rendered as an auxiliary label prefixed with `in expansion of macro
+/// 'M'`.  The primary error label stays on the token's own span so the
+/// user still sees exactly which token tripped the check.
 fn write_report(
     diag: &Diagnostic,
     source_map: &SourceMap,
+    expansions: &ExpansionTable,
     writer: &mut dyn std::io::Write,
     color: bool,
 ) -> std::io::Result<()> {
@@ -308,6 +383,20 @@ fn write_report(
             AriadneLabel::new((label.span.file, label.span.range()))
                 .with_message(&label.message)
                 .with_color(label_color),
+        );
+    }
+
+    // If the primary span was produced by a macro expansion, attach an
+    // "in expansion of macro 'M'" label for each frame in the chain.
+    // Innermost frame first — ariadne renders labels in the order the
+    // user sees them in the source, but the messages themselves make
+    // the chain order explicit.
+    for frame in expansions.backtrace(diag.span.expanded_from) {
+        let msg = format!("in expansion of macro '{}'", frame.macro_name);
+        builder = builder.with_label(
+            AriadneLabel::new((frame.invocation_span.file, frame.invocation_span.range()))
+                .with_message(msg)
+                .with_color(Color::Cyan),
         );
     }
 

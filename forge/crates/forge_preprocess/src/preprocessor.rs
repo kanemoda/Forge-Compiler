@@ -28,7 +28,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use forge_diagnostics::{Diagnostic, FileId, Severity, SourceMap};
+use forge_diagnostics::{
+    Diagnostic, ExpansionFrame, ExpansionId, ExpansionTable, FileId, Severity, SourceMap,
+};
 use forge_lexer::{lex_fragment, IntSuffix, Lexer, Span, StringPrefix, Token, TokenKind};
 
 use crate::cond_expr::{self, PPValue};
@@ -126,6 +128,13 @@ pub struct Preprocessor {
     /// every `#include` boundary so that synthetic tokens
     /// (e.g. `__LINE__` expansions) carry the correct file id.
     current_file_id: FileId,
+    /// Table of every macro-expansion frame produced during this run.
+    /// Populated by [`Preprocessor::expand_object_like`],
+    /// [`Preprocessor::expand_function_like`], and
+    /// [`Preprocessor::expand_magic_macro`]; consumed by the diagnostic
+    /// renderer to emit "in expansion of macro 'M'" backtraces for
+    /// tokens whose [`forge_diagnostics::Span::expanded_from`] is set.
+    expansions: ExpansionTable,
 }
 
 impl Preprocessor {
@@ -164,6 +173,7 @@ impl Preprocessor {
             has_errors: false,
             source_map: SourceMap::new(),
             current_file_id: FileId::INVALID,
+            expansions: ExpansionTable::new(),
         };
         pp.install_predefined_macros(&predefined_macros);
         pp
@@ -198,6 +208,24 @@ impl Preprocessor {
     /// to avoid cloning the map.
     pub fn into_source_map(self) -> SourceMap {
         self.source_map
+    }
+
+    /// Borrow the accumulating [`ExpansionTable`].
+    ///
+    /// Every macro invocation the preprocessor has processed so far
+    /// contributes one frame; tokens produced by an invocation carry
+    /// the frame's [`ExpansionId`] in their
+    /// [`forge_diagnostics::Span::expanded_from`].
+    pub fn expansions(&self) -> &ExpansionTable {
+        &self.expansions
+    }
+
+    /// Consume the preprocessor and return its [`ExpansionTable`] and
+    /// [`SourceMap`] as a pair.  The driver uses this at the end of a
+    /// run so the rendered diagnostics can resolve backtraces without
+    /// cloning either table.
+    pub fn into_source_map_and_expansions(self) -> (SourceMap, ExpansionTable) {
+        (self.source_map, self.expansions)
     }
 
     /// Immutable view of the macro table.  Primarily useful in tests and
@@ -517,24 +545,43 @@ impl Preprocessor {
     /// Splice an object-like macro's replacement list back into `cursor`
     /// for rescanning.  Returns `true` (expansion always succeeds once we
     /// commit to it).
+    ///
+    /// Records one [`ExpansionFrame`] in [`Self::expansions`] and stamps
+    /// the new frame's [`ExpansionId`] into every replacement token
+    /// whose `span.expanded_from` is still [`ExpansionId::NONE`] — body
+    /// tokens are lexed straight from the `#define` source, so they
+    /// start unstamped and get the frame's id here.
     fn expand_object_like(
         &mut self,
         cursor: &mut TokenCursor,
         name: String,
         invocation: PPToken,
     ) -> bool {
-        let replacement = match self.macros.get(&name) {
-            Some(MacroDef::ObjectLike { replacement, .. }) => replacement.clone(),
+        let (replacement, define_span) = match self.macros.get(&name) {
+            Some(MacroDef::ObjectLike {
+                replacement,
+                define_span,
+                ..
+            }) => (replacement.clone(), *define_span),
             _ => unreachable!("caller resolved `{name}` to an object-like macro"),
         };
 
         let mut new_hide_set = invocation.hide_set.clone();
-        new_hide_set.insert(name);
+        new_hide_set.insert(name.clone());
+
+        let expansion_id = self.expansions.push(ExpansionFrame {
+            id: ExpansionId::NONE,
+            invocation_span: invocation.token.span,
+            macro_name: name,
+            definition_span: define_span,
+            parent: invocation.token.span.expanded_from,
+        });
 
         let expansion: Vec<PPToken> = replacement
             .into_iter()
             .enumerate()
-            .map(|(i, t)| {
+            .map(|(i, mut t)| {
+                stamp_expansion(&mut t, expansion_id);
                 let mut pp = PPToken::with_hide_set(t, new_hide_set.clone());
                 if i == 0 {
                     // The first expansion token takes the invocation's
@@ -580,13 +627,19 @@ impl Preprocessor {
             .expect("try_expand peeked `(` before commit");
         let lparen_span = lparen.token.span;
 
-        let (params, is_variadic, replacement) = match self.macros.get(&name) {
+        let (params, is_variadic, replacement, define_span) = match self.macros.get(&name) {
             Some(MacroDef::FunctionLike {
                 params,
                 is_variadic,
                 replacement,
+                define_span,
                 ..
-            }) => (params.clone(), *is_variadic, replacement.clone()),
+            }) => (
+                params.clone(),
+                *is_variadic,
+                replacement.clone(),
+                *define_span,
+            ),
             _ => unreachable!("caller resolved `{name}` to a function-like macro"),
         };
 
@@ -625,16 +678,33 @@ impl Preprocessor {
             return true;
         }
 
-        // 2 + 3: substitute parameters, then process `##`.
+        // 2 + 3: substitute parameters, then process `##`.  The arg
+        // pre-expansion inside `substitute_args` may recursively run
+        // this routine, so the frame for *this* invocation has to be
+        // pushed AFTER substitution — otherwise nested arg expansions
+        // would see the outer frame and mis-attribute themselves as
+        // children of it.
         let substituted = self.substitute_args(&replacement, &params, is_variadic, &args);
         let pasted = self.process_paste(substituted);
 
-        // 4: hide-set.
+        let expansion_id = self.expansions.push(ExpansionFrame {
+            id: ExpansionId::NONE,
+            invocation_span: invocation.token.span,
+            macro_name: name.clone(),
+            definition_span: define_span,
+            parent: invocation.token.span.expanded_from,
+        });
+
+        // 4: hide-set + expansion stamp.  Only tokens that do NOT yet
+        // carry an expansion id receive this frame's id — arg tokens
+        // that came from outer or nested expansions keep theirs per
+        // C17 §6.10.3.1 argument preservation.
         let mut extra_hide: HashSet<String> = invocation.hide_set.clone();
         extra_hide.insert(name);
         let mut final_tokens: Vec<PPToken> = pasted
             .into_iter()
             .map(|mut pp| {
+                stamp_expansion(&mut pp.token, expansion_id);
                 pp.hide_set.extend(extra_hide.iter().cloned());
                 pp
             })
@@ -1484,6 +1554,7 @@ impl Preprocessor {
                     && !t.at_start_of_line()
         );
 
+        let define_span = name_tok.span;
         let new_def = if function_like {
             // Consume the `(`.
             cursor.advance();
@@ -1498,6 +1569,7 @@ impl Preprocessor {
                         params,
                         is_variadic,
                         replacement,
+                        define_span,
                     }
                 }
                 None => return,
@@ -1507,6 +1579,7 @@ impl Preprocessor {
             MacroDef::ObjectLike {
                 name: name.clone(),
                 replacement,
+                define_span,
                 is_predefined: false,
             }
         };
@@ -1841,6 +1914,7 @@ impl Preprocessor {
             MacroDef::ObjectLike {
                 name: name.to_string(),
                 replacement: tokens,
+                define_span: Span::new(FileId::INVALID, 0, 0),
                 is_predefined: true,
             },
         );
@@ -1866,6 +1940,7 @@ impl Preprocessor {
                 params: params.iter().map(|s| s.to_string()).collect(),
                 is_variadic,
                 replacement,
+                define_span: Span::new(FileId::INVALID, 0, 0),
             },
         );
     }
@@ -1879,6 +1954,7 @@ impl Preprocessor {
             MacroDef::ObjectLike {
                 name: name.to_string(),
                 replacement: Vec::new(),
+                define_span: Span::new(FileId::INVALID, 0, 0),
                 is_predefined: true,
             },
         );
@@ -1901,6 +1977,7 @@ impl Preprocessor {
             MacroDef::ObjectLike {
                 name: name.to_string(),
                 replacement: vec![tok],
+                define_span: Span::new(FileId::INVALID, 0, 0),
                 is_predefined: true,
             },
         );
@@ -1994,6 +2071,11 @@ impl Preprocessor {
     /// Dynamic expansion for `__FILE__` and `__LINE__`.  The cursor's
     /// next token is the magic-macro identifier; it is consumed and
     /// replaced by a single freshly-built token.
+    ///
+    /// A one-frame [`ExpansionFrame`] is recorded in
+    /// [`Self::expansions`] so that a diagnostic against the synthesized
+    /// token can render "in expansion of macro '__LINE__'" the same way
+    /// user-defined expansions do.
     fn expand_magic_macro(&mut self, cursor: &mut TokenCursor) -> bool {
         let invocation = match cursor.advance() {
             Some(t) => t,
@@ -2004,15 +2086,15 @@ impl Preprocessor {
             _ => unreachable!("expand_magic_macro: caller already verified identifier"),
         };
 
-        let replacement = match name.as_str() {
+        let mut replacement = match name.as_str() {
             "__FILE__" => {
-                let name = self
+                let file_name = self
                     .file_override
                     .clone()
                     .unwrap_or_else(|| self.current_file.clone());
                 Token {
                     kind: TokenKind::StringLiteral {
-                        value: name,
+                        value: file_name,
                         prefix: StringPrefix::None,
                     },
                     span: invocation.token.span,
@@ -2039,6 +2121,15 @@ impl Preprocessor {
                 return false;
             }
         };
+
+        let expansion_id = self.expansions.push(ExpansionFrame {
+            id: ExpansionId::NONE,
+            invocation_span: invocation.token.span,
+            macro_name: name.clone(),
+            definition_span: Span::new(FileId::INVALID, 0, 0),
+            parent: invocation.token.span.expanded_from,
+        });
+        stamp_expansion(&mut replacement, expansion_id);
 
         // Hide set gets the name so `__LINE__` inside an argument that
         // re-introduces it cannot recur.
@@ -3056,6 +3147,21 @@ fn detect_include_guard(tokens: &[Token]) -> bool {
         tokens.get(last + 1).map(|t| &t.kind),
         Some(TokenKind::Identifier(s)) if s == "endif"
     )
+}
+
+/// Stamp a fresh expansion id onto `tok` only if it does not already
+/// carry one.
+///
+/// C17 §6.10.3.1 argument preservation: when a macro invocation's
+/// arguments are substituted into the body, tokens that came from a
+/// prior expansion (or from a nested expansion of an argument) keep
+/// the expansion id they already have.  Only tokens lexed straight
+/// from the `#define` body carry [`ExpansionId::NONE`] at the moment
+/// of substitution, and those are the ones this helper stamps.
+fn stamp_expansion(tok: &mut Token, id: ExpansionId) {
+    if tok.span.expanded_from == ExpansionId::NONE {
+        tok.span = tok.span.with_expansion(id);
+    }
 }
 
 // ---------------------------------------------------------------------------

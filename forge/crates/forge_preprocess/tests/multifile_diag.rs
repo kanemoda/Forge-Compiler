@@ -19,8 +19,9 @@
 //! We do **not** yet exercise macro backtrace / expansion-site chaining —
 //! that lands with Phase 2F.3.
 
-use forge_lexer::TokenKind;
-use forge_preprocess::{PreprocessConfig, Preprocessor};
+use forge_diagnostics::{render_diagnostics_to_string, Diagnostic, ExpansionId};
+use forge_lexer::{Lexer, TokenKind};
+use forge_preprocess::{FileId, PreprocessConfig, Preprocessor};
 
 /// Drop a file at `dir/name` with `contents`, returning its absolute path.
 fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
@@ -132,5 +133,190 @@ fn tokens_carry_the_file_id_of_the_file_they_were_lexed_from() {
     assert_eq!(
         one.span.file, main_id,
         "`1` was written in main.c, its span.file must match main.c's FileId"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2F.3 — macro-expansion backtrace (`Span::expanded_from`)
+// ---------------------------------------------------------------------------
+
+/// Preprocess `src` against a default config from an in-memory buffer.
+/// Returns the preprocessor (so callers can inspect `expansions()` and
+/// `source_map()` before it is dropped) and the produced token stream.
+fn run_inline(src: &str) -> (Preprocessor, Vec<forge_lexer::Token>) {
+    let tokens = Lexer::new(src, FileId::PRIMARY).tokenize();
+    let mut pp = Preprocessor::new(PreprocessConfig::default());
+    let out = pp.run_with_source(tokens, src, "<input>");
+    let diags = pp.take_diagnostics();
+    assert!(
+        !diags
+            .iter()
+            .any(|d| matches!(d.severity, forge_diagnostics::Severity::Error)),
+        "unexpected diagnostics: {diags:?}"
+    );
+    (pp, out)
+}
+
+/// Single-level object-like expansion: every token produced by expanding
+/// `PI` carries a fresh `ExpansionId`, and the corresponding frame names
+/// the macro.
+#[test]
+fn macro_expansion_single_level() {
+    let (pp, tokens) = run_inline("#define PI 314\nint x = PI;\n");
+
+    let three_fourteen = tokens
+        .iter()
+        .find(|t| matches!(t.kind, TokenKind::IntegerLiteral { value: 314, .. }))
+        .expect("expected the `314` literal from PI's expansion");
+
+    assert!(
+        three_fourteen.span.expanded_from.is_some(),
+        "token produced by macro expansion must carry an ExpansionId, got NONE"
+    );
+
+    let frame = pp
+        .expansions()
+        .get(three_fourteen.span.expanded_from)
+        .expect("expansion id must resolve to a frame");
+    assert_eq!(frame.macro_name, "PI");
+    assert_eq!(
+        frame.parent,
+        ExpansionId::NONE,
+        "a top-level expansion's parent should be NONE (no outer macro)"
+    );
+}
+
+/// Two-level nested expansion: `A(x)` expands to `B(x)`, which expands
+/// to `(x + 1)`.  The produced `+` token carries B's expansion id, and
+/// walking the backtrace yields `[B, A]`.
+#[test]
+fn macro_expansion_nested_two_levels() {
+    let src = "#define B(x) (x + 1)\n#define A(x) B(x)\nint y = A(7);\n";
+    let (pp, tokens) = run_inline(src);
+
+    let plus = tokens
+        .iter()
+        .find(|t| matches!(t.kind, TokenKind::Plus))
+        .expect("expected `+` from B's body after A(7) expansion");
+
+    assert!(
+        plus.span.expanded_from.is_some(),
+        "`+` came from macro expansion and must carry an ExpansionId"
+    );
+
+    let chain: Vec<&str> = pp
+        .expansions()
+        .backtrace(plus.span.expanded_from)
+        .iter()
+        .map(|f| f.macro_name.as_str())
+        .collect();
+    assert_eq!(
+        chain,
+        vec!["B", "A"],
+        "expected innermost-first backtrace B -> A, got {chain:?}"
+    );
+}
+
+/// C17 §6.10.3.1 argument preservation: tokens that came from an inner
+/// expansion retain that inner id when substituted into an outer macro's
+/// body.  With `ID(x)=x` and `F(x)=(x*2)`, the `3` in `F(ID(3))` keeps
+/// ID's expansion id — it does NOT get F's.
+#[test]
+fn macro_argument_preservation() {
+    let src = "#define ID(x) x\n#define F(x) (x*2)\nint r = F(ID(3));\n";
+    let (pp, tokens) = run_inline(src);
+
+    let three = tokens
+        .iter()
+        .find(|t| matches!(t.kind, TokenKind::IntegerLiteral { value: 3, .. }))
+        .expect("expected the `3` literal");
+    let two = tokens
+        .iter()
+        .find(|t| matches!(t.kind, TokenKind::IntegerLiteral { value: 2, .. }))
+        .expect("expected the `2` literal (from F's body)");
+
+    assert!(
+        three.span.expanded_from.is_some(),
+        "`3` came through ID's expansion and must carry an ExpansionId"
+    );
+    assert!(
+        two.span.expanded_from.is_some(),
+        "`2` came from F's body and must carry an ExpansionId"
+    );
+
+    let three_frame = pp
+        .expansions()
+        .get(three.span.expanded_from)
+        .expect("resolvable");
+    let two_frame = pp
+        .expansions()
+        .get(two.span.expanded_from)
+        .expect("resolvable");
+
+    assert_eq!(
+        three_frame.macro_name, "ID",
+        "`3` must be attributed to ID (argument preservation), got {}",
+        three_frame.macro_name
+    );
+    assert_eq!(
+        two_frame.macro_name, "F",
+        "`2` is a body token of F, got {}",
+        two_frame.macro_name
+    );
+}
+
+/// The magic `__LINE__` macro also records an expansion frame so
+/// diagnostics against synthesized built-in tokens can still render a
+/// backtrace.
+#[test]
+fn builtin_line_expansion_tracked() {
+    let (pp, tokens) = run_inline("int line = __LINE__;\n");
+
+    let int_lit = tokens
+        .iter()
+        .find(|t| matches!(t.kind, TokenKind::IntegerLiteral { .. }))
+        .expect("__LINE__ must produce one IntegerLiteral");
+
+    assert!(
+        int_lit.span.expanded_from.is_some(),
+        "__LINE__ replacement token must carry an ExpansionId"
+    );
+    let frame = pp
+        .expansions()
+        .get(int_lit.span.expanded_from)
+        .expect("resolvable");
+    assert_eq!(frame.macro_name, "__LINE__");
+}
+
+/// End-to-end: a diagnostic anchored on an expansion-produced token
+/// renders with one auxiliary "in expansion of macro 'X'" label per
+/// frame in the backtrace.
+#[test]
+fn diagnostic_emits_macro_backtrace() {
+    let src = "#define INNER 99\n#define OUTER INNER\nint z = OUTER;\n";
+    let (pp, tokens) = run_inline(src);
+
+    let ninety_nine = tokens
+        .iter()
+        .find(|t| matches!(t.kind, TokenKind::IntegerLiteral { value: 99, .. }))
+        .expect("expected the `99` literal from INNER via OUTER");
+
+    assert!(
+        ninety_nine.span.expanded_from.is_some(),
+        "`99` must carry an expansion id"
+    );
+
+    let diag = Diagnostic::error("synthetic probe")
+        .span(ninety_nine.span)
+        .label("here");
+    let rendered = render_diagnostics_to_string(pp.source_map(), pp.expansions(), &[diag]);
+
+    assert!(
+        rendered.contains("in expansion of macro 'INNER'"),
+        "expected innermost frame INNER in rendered output, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("in expansion of macro 'OUTER'"),
+        "expected outer frame OUTER in rendered output, got:\n{rendered}"
     );
 }
