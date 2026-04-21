@@ -122,6 +122,12 @@ impl Span {
 
     /// Convenience for tests and single-file fixtures: build a span in
     /// the primary (first) file of a `SourceMap`.
+    ///
+    /// Intended for tests and sentinel spans.  Production code should
+    /// use [`Span::new`] with a real [`FileId`] from the
+    /// [`SourceMap`] — using `Span::primary` inside the compiler will
+    /// cause multi-file diagnostics to point at the wrong file whenever
+    /// the SourceMap holds more than one entry.
     pub const fn primary(start: u32, end: u32) -> Self {
         Self::new(FileId::PRIMARY, start, end)
     }

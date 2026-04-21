@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use forge_diagnostics::Diagnostic;
+use forge_diagnostics::{Diagnostic, FileId};
 use forge_lexer::{Span, Token, TokenKind};
 
 use crate::ast::*;
@@ -52,7 +52,12 @@ impl Parser {
     /// [`peek_ahead`]: Parser::peek_ahead
     pub fn new(mut tokens: Vec<Token>) -> Self {
         if !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)) {
-            let span = tokens.last().map_or(Span::primary(0, 0), |t| {
+            // Sentinel span for the synthetic EOF when the caller hands
+            // us an empty token vector — `FileId::INVALID` documents
+            // that this EOF does not originate from any real source
+            // file.  Non-empty inputs inherit the last token's FileId
+            // so diagnostics fired at EOF still point at the right file.
+            let span = tokens.last().map_or(Span::new(FileId::INVALID, 0, 0), |t| {
                 Span::new(t.span.file, t.span.end, t.span.end)
             });
             tokens.push(Token {
@@ -227,12 +232,18 @@ impl Parser {
 
     /// Build a span from `start` to the end of the previously consumed
     /// token.  If nothing was consumed yet, returns `start` as-is.
+    ///
+    /// Preserves `start.expanded_from` — when an AST node begins inside
+    /// a macro expansion, the combined span must keep pointing at that
+    /// expansion frame or the renderer will lose the backtrace.  Using
+    /// `start`'s id (rather than `prev`'s) is the conventional choice:
+    /// the first token is the anchor a diagnostic typically hangs off.
     pub(crate) fn span_from(&self, start: Span) -> Span {
         if self.pos == 0 {
             return start;
         }
         let prev = &self.tokens[self.pos - 1];
-        Span::new(start.file, start.start, prev.span.end)
+        Span::new(start.file, start.start, prev.span.end).with_expansion(start.expanded_from)
     }
 
     // =====================================================================

@@ -74,9 +74,21 @@ impl SourceFile {
     /// Convert a byte offset into a 1-based `(line, column)` pair.
     ///
     /// Columns are measured in *bytes* from the start of the line, not
-    /// Unicode grapheme clusters.  Offsets past end-of-file saturate to
-    /// the last valid position rather than panicking — callers that
-    /// carry stale or synthetic spans do not take the compiler down.
+    /// Unicode grapheme clusters or code points — a 2-byte UTF-8
+    /// character advances the column counter by 2.  Diagnostic
+    /// rendering therefore reports the same column `gcc -fdiagnostics-color`
+    /// does for an ASCII source and matches byte-accurate editor
+    /// positions for non-ASCII input.
+    ///
+    /// A leading UTF-8 BOM (`0xEF 0xBB 0xBF`) is retained verbatim and
+    /// contributes three bytes to the first line's column count.  This
+    /// is an intentional v1 choice — stripping the BOM would shift
+    /// every column on line 1 and complicate the preprocessor's line
+    /// bookkeeping for no tangible benefit.
+    ///
+    /// Offsets past end-of-file saturate to the last valid position
+    /// rather than panicking — callers that carry stale or synthetic
+    /// spans do not take the compiler down.
     pub fn line_col(&self, offset: u32) -> (u32, u32) {
         let clamped = offset.min(self.source.len() as u32);
         let line_index = match self.line_starts.binary_search(&clamped) {

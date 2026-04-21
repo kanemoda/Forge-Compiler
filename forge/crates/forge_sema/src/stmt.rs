@@ -637,7 +637,7 @@ pub fn analyze_function_def(
 
     // Push the function scope and declare parameters.
     table.push_scope(ScopeKind::Function);
-    declare_parameters(&params, &func.declarator.direct, table, ctx);
+    declare_parameters(&params, &func.declarator.direct, func.span, table, ctx);
 
     // Walk the body directly — the outermost compound shares the
     // function scope per C17 §6.2.1p4.
@@ -678,6 +678,7 @@ pub fn analyze_function_def(
 fn declare_parameters(
     params: &[ParamType],
     direct: &DirectDeclarator,
+    fallback_span: Span,
     table: &mut SymbolTable,
     ctx: &mut SemaContext,
 ) {
@@ -692,9 +693,13 @@ fn declare_parameters(
             }
             continue;
         };
+        // If no per-parameter declarator span is available (defensive
+        // fallback — the parser normally supplies one per named param),
+        // fall back to the function-definition span so the FileId is
+        // correct for multi-file diagnostic rendering.
         let span = param_decls
             .and_then(|list| list.get(idx))
-            .map_or_else(|| Span::primary(0, 0), |pd| pd.span);
+            .map_or(fallback_span, |pd| pd.span);
         if table.lookup_in_current_scope(&pname).is_some() {
             ctx.emit(Diagnostic::error(format!("redefinition of parameter '{pname}'")).span(span));
             continue;

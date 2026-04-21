@@ -78,6 +78,7 @@ cargo run -- emit-ir input.c
 - **The IR verifier runs after every transformation in debug builds.** If you create or modify IR, run the verifier.
 - **Diagnostics are not optional.** Every error the compiler can produce must have: a span (source location), a clear message, and where possible, a suggestion or note.
 - **Use `forge_diagnostics` for all user-facing errors.** Internal errors (bugs in the compiler) should use `panic!` with a descriptive message or return `Err` with context.
+- **Every `Span` carries `FileId` and `ExpansionId`.** Production code that constructs spans must thread both through from the `SourceMap` and `ExpansionTable` emitted by the preprocessor — never fabricate a `FileId::PRIMARY` span inside a compiler phase. When extending a span to cover a wider range, preserve the starting span's `expanded_from` so macro-backtrace rendering continues to work. Tests may use `Span::primary` for single-file scenarios. See `docs/diagnostics.md` for the full pipeline.
 
 ### Naming Conventions
 - Crate names: `forge_<component>` (snake_case)
