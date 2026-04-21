@@ -2,7 +2,7 @@
 //!
 //! NOT a test file — no `#[test]` functions here.
 
-use forge_diagnostics::Diagnostic;
+use forge_diagnostics::{Diagnostic, FileId};
 use forge_lexer::{Lexer, Token};
 
 use crate::ast::{Declaration, Expr, Stmt, TranslationUnit, TypeName};
@@ -78,7 +78,7 @@ pub fn parse_tu_with_diagnostics(src: &str) -> (TranslationUnit, Vec<Diagnostic>
 
 /// Lex source text into a token stream.
 pub fn lex(src: &str) -> Vec<Token> {
-    Lexer::new(src).tokenize()
+    Lexer::new(src, FileId::PRIMARY).tokenize()
 }
 
 fn assert_no_errors(diagnostics: Vec<Diagnostic>, src: &str) {

@@ -27,7 +27,7 @@ use crate::types::{
 // --------------------------------------------------------------------
 
 /// Zero-length span for hand-built AST nodes.
-pub const HS: Span = Span::new(0, 0);
+pub const HS: Span = Span::primary(0, 0);
 
 /// Dummy node id for hand-built AST nodes.
 pub const HN: NodeId = NodeId::DUMMY;
@@ -599,7 +599,7 @@ pub fn fn_ctx(return_ty: QualType) -> FnContext {
 // End-to-end lex + parse + sema helpers
 // --------------------------------------------------------------------
 
-use forge_diagnostics::{Diagnostic, Severity};
+use forge_diagnostics::{Diagnostic, FileId, Severity};
 use forge_lexer::Lexer;
 use forge_parser::Parser;
 
@@ -613,7 +613,7 @@ use crate::tu::analyze_translation_unit;
 /// No preprocessor is involved — sources must be self-contained C17
 /// fragments that the lexer and parser can consume directly.
 pub fn analyze_source(src: &str) -> (Vec<Diagnostic>, SemaContext, SymbolTable) {
-    let tokens = Lexer::new(src).tokenize();
+    let tokens = Lexer::new(src, FileId::PRIMARY).tokenize();
     let (tu, parse_diags) = Parser::parse(tokens);
     let target = ti();
     let (ctx, table) = analyze_translation_unit(&tu, &target);

@@ -16,7 +16,7 @@
 
 use std::time::Instant;
 
-use forge_lexer::Lexer;
+use forge_lexer::{FileId, Lexer};
 
 fn build_source(target_lines: usize) -> String {
     // A compact but heterogeneous template that exercises every major token
@@ -89,13 +89,13 @@ fn main() {
 
     // One warm-up pass so we are not measuring first-allocation overhead.
     {
-        let mut lex = Lexer::new(&source);
+        let mut lex = Lexer::new(&source, FileId::PRIMARY);
         let _ = lex.tokenize();
     }
 
     // Measured pass.
     let start = Instant::now();
-    let mut lex = Lexer::new(&source);
+    let mut lex = Lexer::new(&source, FileId::PRIMARY);
     let tokens = lex.tokenize();
     let diags = lex.take_diagnostics();
     let elapsed = start.elapsed();

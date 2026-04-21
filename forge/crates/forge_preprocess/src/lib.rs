@@ -84,10 +84,11 @@
 //! # Example
 //!
 //! ```
+//! use forge_diagnostics::FileId;
 //! use forge_lexer::Lexer;
 //! use forge_preprocess::{preprocess, PreprocessConfig, Preprocessor};
 //!
-//! let tokens = Lexer::new("#define N 42\nint x = N;").tokenize();
+//! let tokens = Lexer::new("#define N 42\nint x = N;", FileId::PRIMARY).tokenize();
 //!
 //! // High-level: short-circuit on error.
 //! let _ = preprocess(tokens.clone(), PreprocessConfig::default());
@@ -117,7 +118,7 @@ pub use system_includes::detect_system_include_paths;
 
 // Re-export diagnostic/token types downstream crates will almost always
 // want alongside the preprocessor API.
-pub use forge_diagnostics::{Diagnostic, Severity};
+pub use forge_diagnostics::{Diagnostic, FileId, Severity, SourceMap};
 pub use forge_lexer::{Token, TokenKind};
 
 #[cfg(test)]

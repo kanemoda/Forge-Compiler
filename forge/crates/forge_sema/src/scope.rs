@@ -519,8 +519,8 @@ fn kind_redeclaration_mismatch(existing: &Symbol, new_sym: &Symbol) -> Diagnosti
         "redeclaration of '{}' with a different kind",
         new_sym.name
     ))
-    .span(new_sym.span.range())
-    .label_at(existing.span.range(), "previously declared here")
+    .span(new_sym.span)
+    .label_at(existing.span, "previously declared here")
 }
 
 fn incompatible_redeclaration(existing: &Symbol, new_sym: &Symbol) -> Diagnostic {
@@ -528,14 +528,14 @@ fn incompatible_redeclaration(existing: &Symbol, new_sym: &Symbol) -> Diagnostic
         "redeclaration of '{}' with incompatible type",
         new_sym.name
     ))
-    .span(new_sym.span.range())
-    .label_at(existing.span.range(), "previously declared here")
+    .span(new_sym.span)
+    .label_at(existing.span, "previously declared here")
 }
 
 fn duplicate_definition(existing: &Symbol, new_sym: &Symbol) -> Diagnostic {
     Diagnostic::error(format!("redefinition of '{}'", new_sym.name))
-        .span(new_sym.span.range())
-        .label_at(existing.span.range(), "first defined here")
+        .span(new_sym.span)
+        .label_at(existing.span, "first defined here")
 }
 
 fn tag_kind_mismatch(name: &str, old: &TagEntry, new: &TagEntry, span: Span) -> Diagnostic {
@@ -545,7 +545,7 @@ fn tag_kind_mismatch(name: &str, old: &TagEntry, new: &TagEntry, span: Span) -> 
         new.kind_str(),
         old.kind_str()
     ))
-    .span(span.range())
+    .span(span)
 }
 
 fn tag_redeclared_different_id(
@@ -557,7 +557,7 @@ fn tag_redeclared_different_id(
     Diagnostic::error(format!(
         "tag '{name}' already declared in this scope with a different identity"
     ))
-    .span(span.range())
+    .span(span)
 }
 
 // =========================================================================

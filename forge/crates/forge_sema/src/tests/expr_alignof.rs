@@ -11,7 +11,7 @@ use crate::types::Type;
 
 use super::helpers::ti;
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 fn specs(ts: Vec<TypeSpecifierToken>) -> DeclSpecifiers {

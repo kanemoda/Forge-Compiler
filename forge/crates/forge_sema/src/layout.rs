@@ -74,7 +74,7 @@ pub fn complete_struct(
                         .message
                         .clone()
                         .unwrap_or_else(|| "static assertion failed".into());
-                    ctx.emit(Diagnostic::error(msg).span(sa.span.range()));
+                    ctx.emit(Diagnostic::error(msg).span(sa.span));
                 }
             }
         }
@@ -87,7 +87,7 @@ pub fn complete_struct(
             Diagnostic::error(
                 "a struct with a flexible array member must have at least one other named member",
             )
-            .span(def.span.range()),
+            .span(def.span),
         );
     }
 
@@ -132,7 +132,7 @@ pub fn complete_union(
                         .message
                         .clone()
                         .unwrap_or_else(|| "static assertion failed".into());
-                    ctx.emit(Diagnostic::error(msg).span(sa.span.range()));
+                    ctx.emit(Diagnostic::error(msg).span(sa.span));
                 }
             }
         }
@@ -301,7 +301,7 @@ fn lay_out_field(
         } else if sfd.bit_width.is_none() {
             ctx.emit(
                 Diagnostic::error("struct member must have a name or a bit-field width")
-                    .span(sfd.span.range()),
+                    .span(sfd.span),
             );
             continue;
         }
@@ -363,9 +363,7 @@ fn lay_out_union_field(
         let member = if let Some(width_expr) = sfd.bit_width.as_deref() {
             let width = eval_icx_as_i64(width_expr, table, target, ctx).unwrap_or(0);
             if width < 0 {
-                ctx.emit(
-                    Diagnostic::error("bit-field width cannot be negative").span(sfd.span.range()),
-                );
+                ctx.emit(Diagnostic::error("bit-field width cannot be negative").span(sfd.span));
             }
             let storage_unit_size = ty.ty.size_of(target, &ctx.type_ctx).unwrap_or(4) as u32;
             MemberLayout {
@@ -434,7 +432,7 @@ fn place_member(
     if b.has_flexible_array {
         ctx.emit(
             Diagnostic::error("a flexible array member must appear at the end of a struct")
-                .span(span.range()),
+                .span(span),
         );
     }
 
@@ -466,7 +464,7 @@ fn place_member(
     {
         ctx.emit(
             Diagnostic::error("struct member has incomplete type (recursive inclusion by value?)")
-                .span(span.range()),
+                .span(span),
         );
     }
 
@@ -488,11 +486,11 @@ fn place_bit_field(
     span: Span,
 ) {
     if !ty.ty.is_integer() {
-        ctx.emit(Diagnostic::error("bit-field must have an integer type").span(span.range()));
+        ctx.emit(Diagnostic::error("bit-field must have an integer type").span(span));
         return;
     }
     if width < 0 {
-        ctx.emit(Diagnostic::error("bit-field width cannot be negative").span(span.range()));
+        ctx.emit(Diagnostic::error("bit-field width cannot be negative").span(span));
         return;
     }
     let width = width as u32;
@@ -503,7 +501,7 @@ fn place_bit_field(
             Diagnostic::error(format!(
                 "bit-field width ({width}) exceeds the width of its type"
             ))
-            .span(span.range()),
+            .span(span),
         );
         return;
     }

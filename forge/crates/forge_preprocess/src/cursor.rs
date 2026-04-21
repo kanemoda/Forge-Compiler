@@ -154,10 +154,11 @@ fn is_end_of_line(tok: &PPToken) -> bool {
 mod tests {
     use super::*;
     use crate::pp_token::wrap_tokens;
+    use forge_diagnostics::FileId;
     use forge_lexer::{Lexer, Token};
 
     fn lex(src: &str) -> Vec<Token> {
-        Lexer::new(src).tokenize()
+        Lexer::new(src, FileId::PRIMARY).tokenize()
     }
 
     fn cur(src: &str) -> TokenCursor {

@@ -44,7 +44,7 @@ fn char_literal_span_includes_prefix_and_quotes() {
     let (toks, diags) = lex_with_diags("L'A'");
     assert!(diags.is_empty());
     assert_eq!(toks.len(), 1);
-    assert_eq!(toks[0].span, Span::new(0, 4));
+    assert_eq!(toks[0].span, Span::primary(0, 4));
 }
 
 // ---------- Simple escape sequences (every one) ----------
@@ -408,7 +408,7 @@ fn utf32_string_literal() {
 fn string_literal_span_includes_prefix_and_quotes() {
     let (toks, _) = lex_with_diags(r#"u8"hi""#);
     assert_eq!(toks.len(), 1);
-    assert_eq!(toks[0].span, Span::new(0, 6));
+    assert_eq!(toks[0].span, Span::primary(0, 6));
 }
 
 // ---------- Escape sequences in strings ----------
@@ -591,7 +591,7 @@ fn isolated_quote_is_unterminated_literal() {
     // Phase 1.3: a bare `'` or `"` opens a character/string literal
     // that is immediately unterminated.  The lexer emits a diagnostic
     // and still produces the corresponding empty literal token.
-    let mut lx = Lexer::new("'");
+    let mut lx = Lexer::new("'", FileId::PRIMARY);
     let toks = lx.tokenize();
     let diags = lx.take_diagnostics();
     assert_eq!(toks.len(), 2, "expected CharLiteral + Eof, got {toks:?}");
@@ -607,7 +607,7 @@ fn isolated_quote_is_unterminated_literal() {
         "expected diagnostic for unterminated `'`"
     );
 
-    let mut lx = Lexer::new("\"");
+    let mut lx = Lexer::new("\"", FileId::PRIMARY);
     let toks = lx.tokenize();
     let diags = lx.take_diagnostics();
     assert_eq!(toks.len(), 2, "expected StringLiteral + Eof, got {toks:?}");

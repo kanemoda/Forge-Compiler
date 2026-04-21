@@ -16,7 +16,7 @@
 //!
 //! Both flags are consumed (reset) immediately after the token is built.
 
-use forge_diagnostics::Diagnostic;
+use forge_diagnostics::{Diagnostic, FileId};
 
 use crate::token::{CharPrefix, StringPrefix, Token, TokenKind};
 use crate::Span;
@@ -35,6 +35,10 @@ pub struct Lexer<'a> {
     pub(crate) source: &'a str,
     pub(crate) bytes: &'a [u8],
     pub(crate) pos: usize,
+    /// Identity of the source being tokenised.  Stamped into every
+    /// [`Span`] the lexer emits so multi-file diagnostics can trace a
+    /// token back to its originating [`forge_diagnostics::SourceFile`].
+    pub(crate) file_id: FileId,
     /// Flag for the next token: first non-whitespace on its line.
     at_start_of_line: bool,
     /// Flag for the next token: was preceded by whitespace/comment.
@@ -50,17 +54,31 @@ pub struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     /// Create a new lexer over `source`.
-    pub fn new(source: &'a str) -> Self {
+    ///
+    /// `file_id` identifies the [`forge_diagnostics::SourceFile`] the
+    /// caller has registered for `source`; every emitted [`Span`] is
+    /// stamped with this id so the diagnostic renderer can cross
+    /// translation-unit-wide file boundaries.  For tests and other
+    /// single-file callers that do not thread a
+    /// [`forge_diagnostics::SourceMap`], [`FileId::PRIMARY`] is the
+    /// conventional value.
+    pub fn new(source: &'a str, file_id: FileId) -> Self {
         Self {
             source,
             bytes: source.as_bytes(),
             pos: 0,
+            file_id,
             // The first token is by definition at the start of its line.
             at_start_of_line: true,
             has_leading_space: false,
             emitted_eof: false,
             diagnostics: Vec::new(),
         }
+    }
+
+    /// The [`FileId`] this lexer is stamping onto every emitted span.
+    pub fn file_id(&self) -> FileId {
+        self.file_id
     }
 
     /// Drain and return every [`Diagnostic`] produced so far.
@@ -120,7 +138,7 @@ impl<'a> Lexer<'a> {
         let kind = self.lex_kind();
 
         let end = self.pos as u32;
-        let span = Span { start, end };
+        let span = Span::new(self.file_id, start, end);
 
         // Reset running flags for the *next* token.  We do this even for EOF
         // so repeated `next_token` calls (or a cooperating Iterator impl)
@@ -598,6 +616,11 @@ pub fn lookup_keyword(text: &str) -> Option<TokenKind> {
 /// accumulated during the scan are discarded; a caller that needs them
 /// can build a [`Lexer`] directly.
 ///
+/// Every emitted [`Span`] is stamped with [`FileId::INVALID`]: a
+/// token-pasting result belongs to no single source file, and the
+/// renderer treats an invalid id as "synthetic" rather than looking it
+/// up in the [`forge_diagnostics::SourceMap`].
+///
 /// # Examples
 ///
 /// ```
@@ -611,7 +634,7 @@ pub fn lookup_keyword(text: &str) -> Option<TokenKind> {
 /// assert!(lex_fragment("").is_empty());
 /// ```
 pub fn lex_fragment(input: &str) -> Vec<Token> {
-    let mut lexer = Lexer::new(input);
+    let mut lexer = Lexer::new(input, FileId::INVALID);
     let mut tokens = lexer.tokenize();
     if matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)) {
         tokens.pop();

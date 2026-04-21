@@ -44,7 +44,7 @@
 //! * **Exponent without digits** (`1e`, `0x1p`) — error; the exponent
 //!   is treated as `0`.
 
-use forge_diagnostics::Diagnostic;
+use forge_diagnostics::{Diagnostic, Span};
 
 use crate::lexer::Lexer;
 use crate::token::{FloatSuffix, IntSuffix, TokenKind};
@@ -179,7 +179,7 @@ impl Lexer<'_> {
         if self.pos == digits_start {
             self.emit_diagnostic(
                 Diagnostic::error("exponent has no digits")
-                    .span(lit_start..self.pos)
+                    .span(Span::new(self.file_id, lit_start as u32, self.pos as u32))
                     .label("a decimal exponent must have at least one digit after `e`/`E`"),
             );
         }
@@ -210,7 +210,7 @@ impl Lexer<'_> {
         if !had_int_digits {
             self.emit_diagnostic(
                 Diagnostic::error("hex integer literal has no digits")
-                    .span(start..self.pos)
+                    .span(Span::new(self.file_id, start as u32, self.pos as u32))
                     .label("expected one or more hex digits after `0x`"),
             );
             let suffix = self.parse_int_suffix();
@@ -245,7 +245,7 @@ impl Lexer<'_> {
         if !had_int_digits && frac_part.is_empty() {
             self.emit_diagnostic(
                 Diagnostic::error("hex float literal has no hex digits")
-                    .span(start..self.pos)
+                    .span(Span::new(self.file_id, start as u32, self.pos as u32))
                     .label("a hex float must have digits before or after the `.`"),
             );
         }
@@ -265,7 +265,7 @@ impl Lexer<'_> {
         let Some(c) = self.peek() else {
             self.emit_diagnostic(
                 Diagnostic::error("hex float missing binary exponent")
-                    .span(lit_start..self.pos)
+                    .span(Span::new(self.file_id, lit_start as u32, self.pos as u32))
                     .label("hex floating-point literals require a `p` binary exponent"),
             );
             return 0;
@@ -273,7 +273,7 @@ impl Lexer<'_> {
         if c != b'p' && c != b'P' {
             self.emit_diagnostic(
                 Diagnostic::error("hex float missing binary exponent")
-                    .span(lit_start..self.pos)
+                    .span(Span::new(self.file_id, lit_start as u32, self.pos as u32))
                     .label("hex floating-point literals require a `p` binary exponent"),
             );
             return 0;
@@ -295,7 +295,7 @@ impl Lexer<'_> {
         if self.pos == digits_start {
             self.emit_diagnostic(
                 Diagnostic::error("hex float exponent has no digits")
-                    .span(lit_start..self.pos)
+                    .span(Span::new(self.file_id, lit_start as u32, self.pos as u32))
                     .label("the binary exponent (`p...`) must have at least one digit"),
             );
             return 0;
@@ -367,7 +367,7 @@ impl Lexer<'_> {
         if has_invalid_digit {
             self.emit_diagnostic(
                 Diagnostic::error("invalid digit in octal literal")
-                    .span(span_start..self.pos)
+                    .span(Span::new(self.file_id, span_start as u32, self.pos as u32))
                     .label("octal literals may only contain digits 0–7")
                     .note("a literal starting with `0` is octal; use `0x...` for hex"),
             );
@@ -397,7 +397,7 @@ impl Lexer<'_> {
     fn emit_integer_overflow(&mut self, span_start: usize) {
         self.emit_diagnostic(
             Diagnostic::warning("integer literal is too large to fit in 64 bits")
-                .span(span_start..self.pos)
+                .span(Span::new(self.file_id, span_start as u32, self.pos as u32))
                 .label("value has been truncated to its low 64 bits"),
         );
     }
@@ -420,7 +420,7 @@ impl Lexer<'_> {
         } else {
             self.emit_diagnostic(
                 Diagnostic::error(format!("invalid floating-point literal `{body}`"))
-                    .span(lit_start..self.pos)
+                    .span(Span::new(self.file_id, lit_start as u32, self.pos as u32))
                     .label("could not parse as a floating-point value"),
             );
             0.0

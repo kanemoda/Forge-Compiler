@@ -296,12 +296,13 @@ impl Default for PreprocessConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_diagnostics::FileId;
     use forge_lexer::Lexer;
 
     fn lex_body(src: &str) -> Vec<Token> {
         // Drop the trailing Eof so the replacement list is exactly the
         // source.
-        let mut toks = Lexer::new(src).tokenize();
+        let mut toks = Lexer::new(src, FileId::PRIMARY).tokenize();
         toks.pop();
         toks
     }
@@ -429,12 +430,12 @@ mod tests {
 
     #[test]
     fn if_state_new_seeds_from_active_flag() {
-        let on = IfState::new(true, Span::new(0, 3));
+        let on = IfState::new(true, Span::primary(0, 3));
         assert!(on.any_branch_taken);
         assert!(on.current_branch_active);
         assert!(!on.else_seen);
 
-        let off = IfState::new(false, Span::new(0, 3));
+        let off = IfState::new(false, Span::primary(0, 3));
         assert!(!off.any_branch_taken);
         assert!(!off.current_branch_active);
         assert!(!off.else_seen);

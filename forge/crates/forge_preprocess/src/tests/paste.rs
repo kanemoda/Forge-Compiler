@@ -1,6 +1,6 @@
 //! Tests covering the `##` (token-paste) operator and `paste_spelling`.
 
-use forge_diagnostics::Severity;
+use forge_diagnostics::{FileId, Severity};
 use forge_lexer::{Lexer, TokenKind};
 
 use super::helpers::*;
@@ -12,14 +12,26 @@ use crate::expand::paste_spelling;
 
 #[test]
 fn paste_spelling_concatenates_both_sides() {
-    let left = Lexer::new("foo").tokenize().into_iter().next().unwrap();
-    let right = Lexer::new("bar").tokenize().into_iter().next().unwrap();
+    let left = Lexer::new("foo", FileId::PRIMARY)
+        .tokenize()
+        .into_iter()
+        .next()
+        .unwrap();
+    let right = Lexer::new("bar", FileId::PRIMARY)
+        .tokenize()
+        .into_iter()
+        .next()
+        .unwrap();
     assert_eq!(paste_spelling(Some(&left), Some(&right)), "foobar");
 }
 
 #[test]
 fn paste_spelling_handles_empty_left_or_right() {
-    let only = Lexer::new("foo").tokenize().into_iter().next().unwrap();
+    let only = Lexer::new("foo", FileId::PRIMARY)
+        .tokenize()
+        .into_iter()
+        .next()
+        .unwrap();
     assert_eq!(paste_spelling(Some(&only), None), "foo");
     assert_eq!(paste_spelling(None, Some(&only)), "foo");
     assert_eq!(paste_spelling(None, None), "");

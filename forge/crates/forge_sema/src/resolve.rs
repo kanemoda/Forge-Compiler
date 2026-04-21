@@ -1008,5 +1008,5 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
 // =========================================================================
 
 fn error(msg: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic::error(msg).span(span.range())
+    Diagnostic::error(msg).span(span)
 }

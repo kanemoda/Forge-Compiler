@@ -277,7 +277,7 @@ fn int_then_semicolon() {
 #[test]
 fn integer_literal_span_covers_value_and_suffix() {
     let (toks, _) = lex_with_diags("0xFFull");
-    assert_eq!(toks[0].span, Span::new(0, 7));
+    assert_eq!(toks[0].span, Span::primary(0, 7));
 }
 
 // =====================================================================

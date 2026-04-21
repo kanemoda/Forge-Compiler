@@ -9,6 +9,7 @@
 //! symbol table by way of the returned handle — is what downstream
 //! phases consume.
 
+use forge_diagnostics::FileId;
 use forge_lexer::Span;
 use forge_parser::ast::{ExternalDeclaration, TranslationUnit};
 
@@ -96,7 +97,7 @@ fn typedef_symbol(name: &str, ty: QualType) -> Symbol {
         kind: SymbolKind::Typedef,
         storage: StorageClass::None,
         linkage: Linkage::None,
-        span: Span::new(0, 0),
+        span: Span::new(FileId::INVALID, 0, 0),
         is_defined: true,
         is_inline: false,
         is_noreturn: false,
@@ -112,7 +113,7 @@ fn function_symbol(name: &str, ty: QualType, is_noreturn: bool) -> Symbol {
         kind: SymbolKind::Function,
         storage: StorageClass::Extern,
         linkage: Linkage::External,
-        span: Span::new(0, 0),
+        span: Span::new(FileId::INVALID, 0, 0),
         is_defined: false,
         is_inline: false,
         is_noreturn,

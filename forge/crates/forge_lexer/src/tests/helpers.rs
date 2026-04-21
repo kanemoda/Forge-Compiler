@@ -3,7 +3,7 @@
 //! The lexer always emits a trailing [`TokenKind::Eof`]; every helper here
 //! strips it off so tests only need to look at the substantive tokens.
 
-use forge_diagnostics::Diagnostic;
+pub use forge_diagnostics::{Diagnostic, FileId};
 
 use crate::{CharPrefix, FloatSuffix, IntSuffix, Lexer, StringPrefix, Token, TokenKind};
 
@@ -17,7 +17,7 @@ pub fn lex(src: &str) -> Vec<Token> {
 /// Tokenize `src` and return the non-`Eof` tokens along with every
 /// diagnostic the lexer produced.
 pub fn lex_with_diags(src: &str) -> (Vec<Token>, Vec<Diagnostic>) {
-    let mut lx = Lexer::new(src);
+    let mut lx = Lexer::new(src, FileId::PRIMARY);
     let mut toks = lx.tokenize();
     let last = toks
         .pop()

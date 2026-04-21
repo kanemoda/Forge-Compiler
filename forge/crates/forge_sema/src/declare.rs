@@ -115,7 +115,7 @@ pub fn analyze_static_assert(
             .message
             .clone()
             .unwrap_or_else(|| "static assertion failed".into());
-        ctx.emit(Diagnostic::error(msg).span(sa.span.range()));
+        ctx.emit(Diagnostic::error(msg).span(sa.span));
     }
 }
 
@@ -188,7 +188,7 @@ fn analyze_typedef_declarator(
     if init_decl.initializer.is_some() {
         ctx.emit(
             Diagnostic::error("typedef declaration cannot have an initializer")
-                .span(init_decl.span.range()),
+                .span(init_decl.span),
         );
     }
 
@@ -240,9 +240,7 @@ fn analyze_object_or_function_declarator(
         return;
     };
     let Some(name) = name else {
-        ctx.emit(
-            Diagnostic::error("declarator must have an identifier").span(init_decl.span.range()),
-        );
+        ctx.emit(Diagnostic::error("declarator must have an identifier").span(init_decl.span));
         return;
     };
 
@@ -251,7 +249,7 @@ fn analyze_object_or_function_declarator(
     if init_decl.initializer.is_some() && is_function {
         ctx.emit(
             Diagnostic::error("function declaration cannot have an initializer")
-                .span(init_decl.span.range()),
+                .span(init_decl.span),
         );
     }
 
@@ -385,24 +383,21 @@ fn check_scalar_or_string_init(
         Type::Array { .. } => {
             ctx.emit(
                 Diagnostic::error("array initializer must be a brace-enclosed list")
-                    .span(expr_span(expr).range()),
+                    .span(expr_span(expr)),
             );
         }
         Type::Struct(_) | Type::Union(_) => {
             ctx.emit(
                 Diagnostic::error("struct or union initializer must be a brace-enclosed list")
-                    .span(expr_span(expr).range()),
+                    .span(expr_span(expr)),
             );
         }
         Type::Function { .. } => {
-            ctx.emit(
-                Diagnostic::error("cannot initialize a function").span(expr_span(expr).range()),
-            );
+            ctx.emit(Diagnostic::error("cannot initialize a function").span(expr_span(expr)));
         }
         Type::Void => {
             ctx.emit(
-                Diagnostic::error("cannot initialize a value of type 'void'")
-                    .span(expr_span(expr).range()),
+                Diagnostic::error("cannot initialize a value of type 'void'").span(expr_span(expr)),
             );
         }
         _ => {
@@ -460,7 +455,7 @@ fn check_brace_init(
         _ => {
             ctx.emit(
                 Diagnostic::error("brace-enclosed initializer used with non-aggregate type")
-                    .span(span.range()),
+                    .span(span),
             );
             target_ty.clone()
         }
@@ -472,13 +467,10 @@ fn check_scalar_brace(items: &[DesignatedInit], span: Span, ctx: &mut SemaContex
         return;
     }
     if items.len() > 1 {
-        ctx.emit(Diagnostic::warning("excess elements in scalar initializer").span(span.range()));
+        ctx.emit(Diagnostic::warning("excess elements in scalar initializer").span(span));
     }
     if !items[0].designators.is_empty() {
-        ctx.emit(
-            Diagnostic::error("designator used with scalar initializer")
-                .span(items[0].span.range()),
-        );
+        ctx.emit(Diagnostic::error("designator used with scalar initializer").span(items[0].span));
     }
 }
 
@@ -509,7 +501,7 @@ fn check_array_brace(
                         if v < 0 {
                             ctx.emit(
                                 Diagnostic::error("array designator cannot be negative")
-                                    .span(item.span.range()),
+                                    .span(item.span),
                             );
                         } else {
                             current_index = v as u64;
@@ -519,7 +511,7 @@ fn check_array_brace(
                 Designator::Field(_) => {
                     ctx.emit(
                         Diagnostic::error("field designator used to initialize an array")
-                            .span(item.span.range()),
+                            .span(item.span),
                     );
                 }
             }
@@ -533,8 +525,7 @@ fn check_array_brace(
         if let Some(n) = declared_size {
             if current_index >= n {
                 ctx.emit(
-                    Diagnostic::warning("excess elements in array initializer")
-                        .span(item.span.range()),
+                    Diagnostic::warning("excess elements in array initializer").span(item.span),
                 );
             }
         }
@@ -569,16 +560,13 @@ fn check_struct_brace(
         .unwrap_or(0);
 
     if member_count > 0 && items.len() > member_count {
-        ctx.emit(
-            Diagnostic::warning("excess elements in struct initializer").span(list_span.range()),
-        );
+        ctx.emit(Diagnostic::warning("excess elements in struct initializer").span(list_span));
     }
 
     for item in items {
         if let Some(Designator::Index(_)) = item.designators.first() {
             ctx.emit(
-                Diagnostic::error("array designator used to initialize a struct")
-                    .span(item.span.range()),
+                Diagnostic::error("array designator used to initialize a struct").span(item.span),
             );
         }
         // Recursively check without a per-field target type — expression
@@ -604,16 +592,13 @@ fn check_union_brace(
     if items.len() > 1 {
         let all_designated = items.iter().all(|it| !it.designators.is_empty());
         if !all_designated {
-            ctx.emit(
-                Diagnostic::warning("excess elements in union initializer").span(list_span.range()),
-            );
+            ctx.emit(Diagnostic::warning("excess elements in union initializer").span(list_span));
         }
     }
     for item in items {
         if let Some(Designator::Index(_)) = item.designators.first() {
             ctx.emit(
-                Diagnostic::error("array designator used to initialize a union")
-                    .span(item.span.range()),
+                Diagnostic::error("array designator used to initialize a union").span(item.span),
             );
         }
         if let Initializer::List { .. } = &*item.initializer {

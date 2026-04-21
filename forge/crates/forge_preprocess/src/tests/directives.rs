@@ -253,7 +253,8 @@ fn error_directive_span_points_at_the_hash_token() {
     let diags = pp.take_diagnostics();
     let errs = errors_of(&diags);
     assert_eq!(errs.len(), 1);
-    assert_eq!(errs[0].span, 0..1, "span should be the `#` token");
+    assert_eq!(errs[0].span.start, 0, "span should be the `#` token");
+    assert_eq!(errs[0].span.end, 1, "span should be the `#` token");
 }
 
 #[test]
@@ -596,7 +597,7 @@ fn line_directive_coexists_with_error_span_reporting() {
     // The `#` of `#error` is at byte offset 25 in the source above
     // (`#line 999 "synthetic.c"\n` is 24 bytes, then newline → 25).
     let hash_offset = src.find("#error").unwrap();
-    assert_eq!(errs[0].span.start, hash_offset);
+    assert_eq!(errs[0].span.start as usize, hash_offset);
 }
 
 #[test]

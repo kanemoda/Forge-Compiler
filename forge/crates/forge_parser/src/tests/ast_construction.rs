@@ -10,7 +10,7 @@ use crate::ast_ops::*;
 use crate::node_id::NodeId;
 
 /// Helper: a zero-length span for synthetic nodes.
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 
 /// Helper: dummy node id for hand-built AST nodes.
 const N: NodeId = NodeId::DUMMY;
@@ -223,7 +223,7 @@ fn stmt_expr_has_span() {
             span: S,
             node_id: N,
         })),
-        span: Span::new(10, 12),
+        span: Span::primary(10, 12),
         node_id: N,
     };
 

@@ -731,5 +731,5 @@ fn cast_to_integer(v: ConstValue, ty: &Type, target: &TargetInfo) -> ConstValue 
 // =========================================================================
 
 fn error(msg: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic::error(msg).span(span.range())
+    Diagnostic::error(msg).span(span)
 }

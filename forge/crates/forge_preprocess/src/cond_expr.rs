@@ -204,7 +204,7 @@ impl<'a> Parser<'a> {
     fn parse_top(&mut self) -> PPValue {
         if self.at_end() {
             self.diagnostics
-                .push(Diagnostic::error("empty `#if` expression").span(self.if_location.range()));
+                .push(Diagnostic::error("empty `#if` expression").span(self.if_location));
             return PPValue::ZERO;
         }
         let value = self.parse_expr(0);
@@ -215,7 +215,7 @@ impl<'a> Parser<'a> {
                     "unexpected `{}` in `#if` expression",
                     spelling_of(&tok.kind)
                 ))
-                .span(tok.span.range()),
+                .span(tok.span),
             );
         }
         value
@@ -257,8 +257,7 @@ impl<'a> Parser<'a> {
                     _ => {
                         let span = self.current_span();
                         self.diagnostics.push(
-                            Diagnostic::error("expected `:` in conditional expression")
-                                .span(span.range()),
+                            Diagnostic::error("expected `:` in conditional expression").span(span),
                         );
                         return PPValue::ZERO;
                     }
@@ -331,19 +330,15 @@ impl<'a> Parser<'a> {
         let tok = match self.peek() {
             Some(t) => t.clone(),
             None => {
-                self.diagnostics.push(
-                    Diagnostic::error("expected expression in `#if`")
-                        .span(self.if_location.range()),
-                );
+                self.diagnostics
+                    .push(Diagnostic::error("expected expression in `#if`").span(self.if_location));
                 return PPValue::ZERO;
             }
         };
         match &tok.kind {
             TokenKind::Eof => {
-                self.diagnostics.push(
-                    Diagnostic::error("expected expression in `#if`")
-                        .span(self.if_location.range()),
-                );
+                self.diagnostics
+                    .push(Diagnostic::error("expected expression in `#if`").span(self.if_location));
                 PPValue::ZERO
             }
             TokenKind::IntegerLiteral { value, suffix } => {
@@ -367,10 +362,8 @@ impl<'a> Parser<'a> {
                     }
                     _ => {
                         let span = self.current_span();
-                        self.diagnostics.push(
-                            Diagnostic::error("expected `)` in `#if` expression")
-                                .span(span.range()),
-                        );
+                        self.diagnostics
+                            .push(Diagnostic::error("expected `)` in `#if` expression").span(span));
                     }
                 }
                 v
@@ -406,7 +399,7 @@ impl<'a> Parser<'a> {
                         "unexpected `{}` in `#if` expression",
                         spelling_of(&tok.kind)
                     ))
-                    .span(tok.span.range()),
+                    .span(tok.span),
                 );
                 self.advance();
                 PPValue::ZERO
@@ -543,9 +536,8 @@ impl<'a> Parser<'a> {
         if self.suppress_runtime_warnings > 0 {
             return;
         }
-        self.diagnostics.push(
-            Diagnostic::warning(format!("{what} by zero in `#if` expression")).span(span.range()),
-        );
+        self.diagnostics
+            .push(Diagnostic::warning(format!("{what} by zero in `#if` expression")).span(span));
     }
 
     // --- cursor helpers ----------------------------------------------

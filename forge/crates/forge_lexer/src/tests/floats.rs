@@ -210,13 +210,13 @@ fn float_then_semicolon() {
 #[test]
 fn float_literal_span_covers_value_and_suffix() {
     let (toks, _) = lex_with_diags("1.5e-3f");
-    assert_eq!(toks[0].span, Span::new(0, 7));
+    assert_eq!(toks[0].span, Span::primary(0, 7));
 }
 
 #[test]
 fn float_from_leading_dot_span() {
     let (toks, _) = lex_with_diags(".5");
-    assert_eq!(toks[0].span, Span::new(0, 2));
+    assert_eq!(toks[0].span, Span::primary(0, 2));
 }
 
 // =====================================================================

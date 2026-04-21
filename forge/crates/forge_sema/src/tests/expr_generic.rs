@@ -18,7 +18,7 @@ use crate::types::{QualType, Type};
 
 use super::helpers::{int, q, t_float, ti};
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 fn ident(name: &str, id: u32) -> Expr {

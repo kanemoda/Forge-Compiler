@@ -1978,11 +1978,11 @@ fn check_comma(
 // =========================================================================
 
 fn error(msg: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic::error(msg).span(span.range())
+    Diagnostic::error(msg).span(span)
 }
 
 fn warning(msg: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic::warning(msg).span(span.range())
+    Diagnostic::warning(msg).span(span)
 }
 
 // =========================================================================

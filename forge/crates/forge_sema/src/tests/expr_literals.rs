@@ -16,7 +16,7 @@ use crate::types::{ArraySize, QualType, Signedness, Type};
 
 use super::helpers::ti;
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 
 fn int_lit(value: u64, suffix: IntSuffix, id: u32) -> Expr {
     Expr::IntLiteral {

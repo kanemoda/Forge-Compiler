@@ -21,7 +21,7 @@ use super::helpers::*;
 fn tu(decls: Vec<ExternalDeclaration>) -> TranslationUnit {
     TranslationUnit {
         declarations: decls,
-        span: Span::new(0, 0),
+        span: Span::primary(0, 0),
     }
 }
 

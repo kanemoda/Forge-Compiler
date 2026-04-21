@@ -125,10 +125,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_diagnostics::FileId;
     use forge_lexer::Lexer;
 
     fn first_token(src: &str) -> Token {
-        Lexer::new(src)
+        Lexer::new(src, FileId::PRIMARY)
             .tokenize()
             .into_iter()
             .next()
@@ -176,7 +177,7 @@ mod tests {
 
     #[test]
     fn wrap_and_unwrap_round_trip_a_token_stream() {
-        let tokens = Lexer::new("int x = 1;").tokenize();
+        let tokens = Lexer::new("int x = 1;", FileId::PRIMARY).tokenize();
         let wrapped = wrap_tokens(tokens.clone());
         assert_eq!(wrapped.len(), tokens.len());
         assert!(wrapped.iter().all(|p| p.hide_set.is_empty()));

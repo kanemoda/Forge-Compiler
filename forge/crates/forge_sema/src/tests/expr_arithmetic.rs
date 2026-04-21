@@ -19,7 +19,7 @@ use crate::types::{ImplicitConversion, QualType, Type};
 
 use super::helpers::{int, q, short, t_double, t_float, ti};
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 
 fn ident(name: &str, id: u32) -> Expr {
     Expr::Ident {

@@ -118,14 +118,14 @@ fn compound_expression() {
 #[test]
 fn dot_alone_is_dot_punctuator() {
     // Just `.` (no digit after) is the Dot punctuator.
-    let toks = Lexer::new(".").tokenize();
+    let toks = Lexer::new(".", FileId::PRIMARY).tokenize();
     assert_eq!(toks.len(), 2);
     assert_eq!(toks[0].kind, TokenKind::Dot);
 }
 
 #[test]
 fn ellipsis_is_still_ellipsis() {
-    let toks = Lexer::new("...").tokenize();
+    let toks = Lexer::new("...", FileId::PRIMARY).tokenize();
     assert_eq!(toks.len(), 2);
     assert_eq!(toks[0].kind, TokenKind::Ellipsis);
 }

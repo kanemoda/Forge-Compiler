@@ -12,7 +12,7 @@ use crate::types::{QualType, StructLayout, StructTypeId, UnionTypeId};
 
 use super::helpers::{int, q, uint};
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 
 fn sym(name: &str, ty: QualType, kind: SymbolKind) -> Symbol {
     Symbol {

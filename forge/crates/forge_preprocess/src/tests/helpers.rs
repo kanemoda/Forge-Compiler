@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use forge_diagnostics::{Diagnostic, Severity};
+use forge_diagnostics::{Diagnostic, FileId, Severity};
 use forge_lexer::{Lexer, Token, TokenKind};
 
 use crate::{PreprocessConfig, Preprocessor};
@@ -15,7 +15,7 @@ const DEFAULT_INPUT_NAME: &str = "<input>";
 
 /// Lex `src` into a token stream, keeping the trailing `Eof` sentinel.
 pub fn lex(src: &str) -> Vec<Token> {
-    Lexer::new(src).tokenize()
+    Lexer::new(src, FileId::PRIMARY).tokenize()
 }
 
 /// Drive the preprocessor with the given source text, returning the

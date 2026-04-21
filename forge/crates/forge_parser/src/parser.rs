@@ -52,9 +52,9 @@ impl Parser {
     /// [`peek_ahead`]: Parser::peek_ahead
     pub fn new(mut tokens: Vec<Token>) -> Self {
         if !matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Eof)) {
-            let span = tokens
-                .last()
-                .map_or(Span::new(0, 0), |t| Span::new(t.span.end, t.span.end));
+            let span = tokens.last().map_or(Span::primary(0, 0), |t| {
+                Span::new(t.span.file, t.span.end, t.span.end)
+            });
             tokens.push(Token {
                 kind: TokenKind::Eof,
                 span,
@@ -232,7 +232,7 @@ impl Parser {
             return start;
         }
         let prev = &self.tokens[self.pos - 1];
-        Span::new(start.start, prev.span.end)
+        Span::new(start.file, start.start, prev.span.end)
     }
 
     // =====================================================================
@@ -270,15 +270,14 @@ impl Parser {
     /// Record an error diagnostic.
     pub(crate) fn error(&mut self, message: impl Into<String>, span: Span) {
         self.has_errors = true;
-        self.diagnostics
-            .push(Diagnostic::error(message).span(span.range()));
+        self.diagnostics.push(Diagnostic::error(message).span(span));
     }
 
     /// Record a warning diagnostic.
     #[allow(dead_code)]
     pub(crate) fn warning(&mut self, message: impl Into<String>, span: Span) {
         self.diagnostics
-            .push(Diagnostic::warning(message).span(span.range()));
+            .push(Diagnostic::warning(message).span(span));
     }
 
     /// Drain and return all accumulated diagnostics, leaving the parser

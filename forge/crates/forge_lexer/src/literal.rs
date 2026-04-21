@@ -38,7 +38,7 @@
 //!   downstream code can re-encode to the target string encoding using
 //!   the literal's [`StringPrefix`](crate::token::StringPrefix).
 
-use forge_diagnostics::Diagnostic;
+use forge_diagnostics::{Diagnostic, Span};
 
 use crate::lexer::Lexer;
 use crate::token::{CharPrefix, StringPrefix, TokenKind};
@@ -107,14 +107,14 @@ impl Lexer<'_> {
         if !closed {
             self.emit_diagnostic(
                 Diagnostic::error("unterminated character constant")
-                    .span(open_pos..self.pos)
+                    .span(Span::new(self.file_id, open_pos as u32, self.pos as u32))
                     .label("unterminated character constant starts here")
                     .note("C character constants must be closed with `'` on the same line"),
             );
         } else if values.is_empty() {
             self.emit_diagnostic(
                 Diagnostic::error("empty character constant")
-                    .span(open_pos..self.pos)
+                    .span(Span::new(self.file_id, open_pos as u32, self.pos as u32))
                     .label("a character constant must contain at least one character"),
             );
         }
@@ -158,7 +158,7 @@ impl Lexer<'_> {
         if !closed {
             self.emit_diagnostic(
                 Diagnostic::error("unterminated string literal")
-                    .span(open_pos..self.pos)
+                    .span(Span::new(self.file_id, open_pos as u32, self.pos as u32))
                     .label("unterminated string literal starts here")
                     .note("C string literals must be closed with `\"` on the same line"),
             );
@@ -185,7 +185,7 @@ impl Lexer<'_> {
         let Some(c) = self.peek() else {
             self.emit_diagnostic(
                 Diagnostic::error("incomplete escape sequence at end of input")
-                    .span(esc_start..self.pos)
+                    .span(Span::new(self.file_id, esc_start as u32, self.pos as u32))
                     .label("a `\\` must be followed by an escape character"),
             );
             return EscapeResult::Error;
@@ -235,7 +235,7 @@ impl Lexer<'_> {
                 let bad_ch = self.consume_unicode_char();
                 self.emit_diagnostic(
                     Diagnostic::warning(format!("unknown escape sequence: '\\{bad_ch}'"))
-                        .span(esc_start..self.pos)
+                        .span(Span::new(self.file_id, esc_start as u32, self.pos as u32))
                         .label("unknown escape sequence")
                         .note("valid escapes are \\a \\b \\f \\n \\r \\t \\v \\\\ \\' \\\" \\? \\0 \\xHH \\uHHHH \\UHHHHHHHH"),
                 );
@@ -296,7 +296,7 @@ impl Lexer<'_> {
         if digits == 0 {
             self.emit_diagnostic(
                 Diagnostic::error("\\x used with no following hex digits")
-                    .span(esc_start..self.pos)
+                    .span(Span::new(self.file_id, esc_start as u32, self.pos as u32))
                     .label("expected one or more hex digits after `\\x`"),
             );
             return EscapeResult::Error;
@@ -305,7 +305,7 @@ impl Lexer<'_> {
         if overflowed {
             self.emit_diagnostic(
                 Diagnostic::warning("hex escape sequence overflows 32 bits")
-                    .span(esc_start..self.pos)
+                    .span(Span::new(self.file_id, esc_start as u32, self.pos as u32))
                     .label("value truncated to the low 32 bits"),
             );
         }
@@ -325,7 +325,7 @@ impl Lexer<'_> {
                     Diagnostic::error(format!(
                         "incomplete universal character name: expected {n} hex digits, found {i}"
                     ))
-                    .span(esc_start..self.pos)
+                    .span(Span::new(self.file_id, esc_start as u32, self.pos as u32))
                     .label("universal character name truncated here"),
                 );
                 return EscapeResult::Error;
@@ -339,7 +339,7 @@ impl Lexer<'_> {
                         Diagnostic::error(format!(
                             "incomplete universal character name: expected {n} hex digits, found {i}"
                         ))
-                        .span(esc_start..self.pos)
+                        .span(Span::new(self.file_id, esc_start as u32, self.pos as u32))
                         .label("non-hex digit in universal character name"),
                     );
                     return EscapeResult::Error;
@@ -400,7 +400,7 @@ fn combine_char_values(
             } else {
                 lexer.emit_diagnostic(
                     Diagnostic::warning("multi-character wide character constant")
-                        .span(open_pos..lexer.pos)
+                        .span(Span::new(lexer.file_id, open_pos as u32, lexer.pos as u32))
                         .label("only the first character is retained")
                         .note("wide character constants (L'...', u'...', U'...') may contain a single character"),
                 );

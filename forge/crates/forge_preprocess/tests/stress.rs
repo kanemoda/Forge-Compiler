@@ -8,13 +8,13 @@
 //! do not slow down the tight unit-test cycle.
 
 use forge_lexer::{Lexer, Token, TokenKind};
-use forge_preprocess::{Diagnostic, PreprocessConfig, Preprocessor, Severity};
+use forge_preprocess::{Diagnostic, FileId, PreprocessConfig, Preprocessor, Severity};
 
 /// Run the preprocessor on `src` against a default config and a `<input>`
 /// synthetic filename.  Returns the token stream and every diagnostic
 /// that was emitted.
 fn run(src: &str) -> (Vec<Token>, Vec<Diagnostic>) {
-    let tokens = Lexer::new(src).tokenize();
+    let tokens = Lexer::new(src, FileId::PRIMARY).tokenize();
     let mut pp = Preprocessor::new(PreprocessConfig::default());
     let out = pp.run(tokens);
     let diags = pp.take_diagnostics();

@@ -23,7 +23,7 @@ use crate::scope::{Linkage, ScopeKind, StorageClass, SymbolKind, SymbolTable};
 
 use super::helpers::ti;
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 // ---------------------------------------------------------------------

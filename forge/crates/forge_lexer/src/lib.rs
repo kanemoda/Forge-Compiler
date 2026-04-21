@@ -31,9 +31,10 @@
 //! # Example
 //!
 //! ```
+//! use forge_diagnostics::FileId;
 //! use forge_lexer::{Lexer, TokenKind};
 //!
-//! let mut lex = Lexer::new("int x");
+//! let mut lex = Lexer::new("int x", FileId::PRIMARY);
 //! let tokens = lex.tokenize();
 //!
 //! assert_eq!(tokens[0].kind, TokenKind::Int);
@@ -62,8 +63,6 @@
 //! All diagnostics accumulated during lexing can be retrieved via
 //! [`Lexer::take_diagnostics`].
 
-use std::fmt;
-
 pub mod lexer;
 pub mod literal;
 pub mod numeric;
@@ -72,48 +71,6 @@ pub mod token;
 #[cfg(test)]
 mod tests;
 
-pub use forge_diagnostics::Diagnostic;
+pub use forge_diagnostics::{Diagnostic, FileId, Span};
 pub use lexer::{lex_fragment, lookup_keyword, Lexer};
 pub use token::{CharPrefix, FloatSuffix, IntSuffix, StringPrefix, Token, TokenKind};
-
-/// A byte-offset range within the source text.
-///
-/// Stored as `u32` on both ends so a [`Token`] stays small; this limits
-/// translation-unit size to 4 GiB, which is well beyond any real C file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Span {
-    /// Inclusive start byte offset.
-    pub start: u32,
-    /// Exclusive end byte offset.
-    pub end: u32,
-}
-
-impl Span {
-    /// Build a span from explicit start and end byte offsets.
-    pub const fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
-    }
-
-    /// The length of the span in bytes.
-    pub const fn len(&self) -> u32 {
-        self.end - self.start
-    }
-
-    /// Whether the span covers zero bytes.
-    pub const fn is_empty(&self) -> bool {
-        self.end == self.start
-    }
-
-    /// Convert to a [`std::ops::Range<usize>`] for use with byte-indexing APIs
-    /// and [`forge_diagnostics`](https://docs.rs) spans.
-    pub fn range(&self) -> std::ops::Range<usize> {
-        self.start as usize..self.end as usize
-    }
-}
-
-impl fmt::Display for Span {
-    /// Renders the span as `"start..end"`.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..{}", self.start, self.end)
-    }
-}

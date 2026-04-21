@@ -337,7 +337,7 @@ fn analyze_switch(
     if !ty.ty.is_integer() {
         ctx.emit(
             Diagnostic::error("switch controlling expression must have integer type")
-                .span(expr_span_of(controlling).range())
+                .span(expr_span_of(controlling))
                 .label(format!(
                     "type '{}' is not an integer",
                     ty.to_c_string(&ctx.type_ctx)
@@ -362,9 +362,7 @@ fn analyze_case(
     ctx: &mut SemaContext,
 ) {
     if !fn_ctx.in_switch {
-        ctx.emit(
-            Diagnostic::error("'case' label is not inside a switch statement").span(span.range()),
-        );
+        ctx.emit(Diagnostic::error("'case' label is not inside a switch statement").span(span));
     }
     // ICX evaluation is attempted regardless of in_switch so the user
     // sees both errors in a single pass.
@@ -372,7 +370,7 @@ fn analyze_case(
     if let Some(v) = evaluated {
         if let Some(info) = fn_ctx.switch_stack.last_mut() {
             if !info.cases_seen.insert(v) {
-                ctx.emit(Diagnostic::error(format!("duplicate case value {v}")).span(span.range()));
+                ctx.emit(Diagnostic::error(format!("duplicate case value {v}")).span(span));
             }
         }
     }
@@ -388,13 +386,10 @@ fn analyze_default(
     ctx: &mut SemaContext,
 ) {
     if !fn_ctx.in_switch {
-        ctx.emit(
-            Diagnostic::error("'default' label is not inside a switch statement")
-                .span(span.range()),
-        );
+        ctx.emit(Diagnostic::error("'default' label is not inside a switch statement").span(span));
     } else if let Some(info) = fn_ctx.switch_stack.last_mut() {
         if info.has_default {
-            ctx.emit(Diagnostic::error("multiple default labels in one switch").span(span.range()));
+            ctx.emit(Diagnostic::error("multiple default labels in one switch").span(span));
         } else {
             info.has_default = true;
         }
@@ -420,7 +415,7 @@ fn analyze_return(
             if !fn_ctx.return_type.ty.is_void() {
                 ctx.emit(
                     Diagnostic::error("non-void function must return a value")
-                        .span(span.range())
+                        .span(span)
                         .note(format!(
                             "return type is '{}'",
                             fn_ctx.return_type.to_c_string(&ctx.type_ctx)
@@ -433,7 +428,7 @@ fn analyze_return(
             if fn_ctx.return_type.ty.is_void() {
                 ctx.emit(
                     Diagnostic::error("void function cannot return a value")
-                        .span(span.range())
+                        .span(span)
                         .label(format!(
                             "returning value of type '{}'",
                             expr_ty.to_c_string(&ctx.type_ctx)
@@ -450,7 +445,7 @@ fn analyze_return(
 
 fn analyze_break(span: Span, fn_ctx: &FnContext, ctx: &mut SemaContext) {
     if !fn_ctx.in_loop && !fn_ctx.in_switch {
-        ctx.emit(Diagnostic::error("'break' statement not in loop or switch").span(span.range()));
+        ctx.emit(Diagnostic::error("'break' statement not in loop or switch").span(span));
     }
 }
 
@@ -458,7 +453,7 @@ fn analyze_continue(span: Span, fn_ctx: &FnContext, ctx: &mut SemaContext) {
     // C17 §6.8.6.2: `continue` is a loop construct — a switch that is
     // *not* inside a loop does not satisfy the requirement.
     if !fn_ctx.in_loop {
-        ctx.emit(Diagnostic::error("'continue' statement not in loop").span(span.range()));
+        ctx.emit(Diagnostic::error("'continue' statement not in loop").span(span));
     }
 }
 
@@ -478,8 +473,8 @@ fn analyze_label(
     if let Some(prev) = fn_ctx.labels_defined.get(name) {
         ctx.emit(
             Diagnostic::error(format!("redefinition of label '{name}'"))
-                .span(span.range())
-                .label_at(prev.range(), "previously defined here"),
+                .span(span)
+                .label_at(*prev, "previously defined here"),
         );
     } else {
         fn_ctx.labels_defined.insert(name.to_string(), span);
@@ -495,7 +490,7 @@ fn require_scalar_condition(ty: &QualType, span: Span, kw: &str, ctx: &mut SemaC
     if !ty.ty.is_scalar() {
         ctx.emit(
             Diagnostic::error(format!("'{kw}' condition must have scalar type",))
-                .span(span.range())
+                .span(span)
                 .label(format!(
                     "type '{}' is not scalar",
                     ty.to_c_string(&ctx.type_ctx)
@@ -515,7 +510,7 @@ fn warn_on_assignment_in_condition(expr: &Expr, ctx: &mut SemaContext) {
             Diagnostic::warning(
                 "assignment used as condition — did you mean '==' for equality comparison?",
             )
-            .span(span.range())
+            .span(*span)
             .note("wrap the expression in an extra pair of parentheses to silence this warning"),
         );
     }
@@ -584,10 +579,7 @@ pub fn analyze_function_def(
         return;
     };
     let Some(name) = name_opt else {
-        ctx.emit(
-            Diagnostic::error("function definition must have an identifier")
-                .span(func.span.range()),
-        );
+        ctx.emit(Diagnostic::error("function definition must have an identifier").span(func.span));
         return;
     };
 
@@ -601,9 +593,7 @@ pub fn analyze_function_def(
             ..
         } => ((**return_type).clone(), params.clone(), *is_prototype),
         _ => {
-            ctx.emit(
-                Diagnostic::error(format!("'{name}' is not a function")).span(func.span.range()),
-            );
+            ctx.emit(Diagnostic::error(format!("'{name}' is not a function")).span(func.span));
             return;
         }
     };
@@ -640,7 +630,7 @@ pub fn analyze_function_def(
     if !is_prototype && !params.is_empty() {
         ctx.emit(
             Diagnostic::error("old-style (K&R) function definitions are not supported")
-                .span(func.span.range()),
+                .span(func.span),
         );
         return;
     }
@@ -661,9 +651,7 @@ pub fn analyze_function_def(
     // require them to be referenced).
     for (lname, lspan) in &fn_ctx.labels_referenced {
         if !fn_ctx.labels_defined.contains_key(lname) {
-            ctx.emit(
-                Diagnostic::error(format!("use of undeclared label '{lname}'")).span(lspan.range()),
-            );
+            ctx.emit(Diagnostic::error(format!("use of undeclared label '{lname}'")).span(*lspan));
         }
     }
 
@@ -676,7 +664,7 @@ pub fn analyze_function_def(
             Diagnostic::warning(format!(
                 "non-void function '{name}' does not return a value on any path",
             ))
-            .span(func.span.range()),
+            .span(func.span),
         );
     }
 
@@ -699,19 +687,16 @@ fn declare_parameters(
             if let Some(pd) = param_decls.and_then(|list| list.get(idx)) {
                 ctx.emit(
                     Diagnostic::error("parameter name omitted in function definition")
-                        .span(pd.span.range()),
+                        .span(pd.span),
                 );
             }
             continue;
         };
         let span = param_decls
             .and_then(|list| list.get(idx))
-            .map_or_else(|| Span::new(0, 0), |pd| pd.span);
+            .map_or_else(|| Span::primary(0, 0), |pd| pd.span);
         if table.lookup_in_current_scope(&pname).is_some() {
-            ctx.emit(
-                Diagnostic::error(format!("redefinition of parameter '{pname}'"))
-                    .span(span.range()),
-            );
+            ctx.emit(Diagnostic::error(format!("redefinition of parameter '{pname}'")).span(span));
             continue;
         }
         let sym = Symbol {

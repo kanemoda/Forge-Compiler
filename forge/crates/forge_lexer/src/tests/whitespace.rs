@@ -10,22 +10,22 @@ use crate::{IntSuffix, Lexer, Span, Token, TokenKind};
 
 #[test]
 fn span_display() {
-    assert_eq!(Span::new(0, 0).to_string(), "0..0");
-    assert_eq!(Span::new(5, 10).to_string(), "5..10");
-    assert_eq!(Span::new(123, 456).to_string(), "123..456");
+    assert_eq!(Span::primary(0, 0).to_string(), "0:0..0");
+    assert_eq!(Span::primary(5, 10).to_string(), "0:5..10");
+    assert_eq!(Span::primary(123, 456).to_string(), "0:123..456");
 }
 
 #[test]
 fn span_len_and_is_empty() {
-    assert_eq!(Span::new(0, 0).len(), 0);
-    assert!(Span::new(0, 0).is_empty());
-    assert_eq!(Span::new(3, 7).len(), 4);
-    assert!(!Span::new(3, 7).is_empty());
+    assert_eq!(Span::primary(0, 0).len(), 0);
+    assert!(Span::primary(0, 0).is_empty());
+    assert_eq!(Span::primary(3, 7).len(), 4);
+    assert!(!Span::primary(3, 7).is_empty());
 }
 
 #[test]
 fn span_range() {
-    let s = Span::new(5, 10);
+    let s = Span::primary(5, 10);
     assert_eq!(s.range(), 5_usize..10_usize);
 }
 
@@ -35,7 +35,7 @@ fn span_range() {
 
 #[test]
 fn whitespace_only_emits_only_eof() {
-    let toks = Lexer::new("   \t\n\r\n  ").tokenize();
+    let toks = Lexer::new("   \t\n\r\n  ", FileId::PRIMARY).tokenize();
     assert_eq!(toks.len(), 1);
     assert!(matches!(toks[0].kind, TokenKind::Eof));
 }
@@ -47,17 +47,17 @@ fn whitespace_only_emits_only_eof() {
 #[test]
 fn spans_are_byte_offsets() {
     let toks = lex("int x");
-    assert_eq!(toks[0].span, Span::new(0, 3), "`int` span");
-    assert_eq!(toks[1].span, Span::new(4, 5), "`x` span");
+    assert_eq!(toks[0].span, Span::primary(0, 3), "`int` span");
+    assert_eq!(toks[1].span, Span::primary(4, 5), "`x` span");
 }
 
 #[test]
 fn eof_span_points_at_end_of_input() {
     let src = "int";
-    let toks = Lexer::new(src).tokenize();
+    let toks = Lexer::new(src, FileId::PRIMARY).tokenize();
     let eof = toks.last().unwrap();
     assert!(matches!(eof.kind, TokenKind::Eof));
-    assert_eq!(eof.span, Span::new(3, 3));
+    assert_eq!(eof.span, Span::primary(3, 3));
 }
 
 // =====================================================================
@@ -158,7 +158,7 @@ fn part2h_blank_lines_then_token_sets_start_of_line() {
 
 #[test]
 fn part3_empty_input_is_only_eof() {
-    let toks = Lexer::new("").tokenize();
+    let toks = Lexer::new("", FileId::PRIMARY).tokenize();
     assert_eq!(toks.len(), 1);
     assert!(matches!(toks[0].kind, TokenKind::Eof));
 }

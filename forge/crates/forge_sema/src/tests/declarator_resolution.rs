@@ -47,7 +47,7 @@ fn specs_with_quals(
     }
 }
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 fn int_literal(v: u64) -> Expr {

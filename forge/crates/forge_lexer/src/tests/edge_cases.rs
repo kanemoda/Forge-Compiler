@@ -10,10 +10,10 @@ use crate::{lex_fragment, IntSuffix, Lexer, Span, TokenKind};
 
 #[test]
 fn empty_source_emits_only_eof() {
-    let toks = Lexer::new("").tokenize();
+    let toks = Lexer::new("", FileId::PRIMARY).tokenize();
     assert_eq!(toks.len(), 1);
     assert!(matches!(toks[0].kind, TokenKind::Eof));
-    assert_eq!(toks[0].span, Span::new(0, 0));
+    assert_eq!(toks[0].span, Span::primary(0, 0));
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn non_ascii_character_is_unknown_and_span_covers_utf8() {
     let toks = lex("é");
     assert_eq!(toks.len(), 1);
     assert_eq!(toks[0].kind, TokenKind::Unknown('é'));
-    assert_eq!(toks[0].span, Span::new(0, 2));
+    assert_eq!(toks[0].span, Span::primary(0, 2));
 }
 
 // =====================================================================
@@ -32,14 +32,14 @@ fn non_ascii_character_is_unknown_and_span_covers_utf8() {
 #[test]
 fn iterator_yields_same_tokens_as_tokenize() {
     let src = "int x; return 0;";
-    let via_tokenize = Lexer::new(src).tokenize();
-    let via_iter: Vec<_> = Lexer::new(src).collect();
+    let via_tokenize = Lexer::new(src, FileId::PRIMARY).tokenize();
+    let via_iter: Vec<_> = Lexer::new(src, FileId::PRIMARY).collect();
     assert_eq!(via_iter, via_tokenize);
 }
 
 #[test]
 fn iterator_returns_none_after_eof() {
-    let mut it = Lexer::new("int");
+    let mut it = Lexer::new("int", FileId::PRIMARY);
     // int, Eof, then None forever.
     assert!(matches!(it.next().unwrap().kind, TokenKind::Int));
     assert!(matches!(it.next().unwrap().kind, TokenKind::Eof));
@@ -204,7 +204,7 @@ fn part3_unterminated_char_recovers() {
 
 #[test]
 fn part3_unterminated_block_comment_reaches_eof_without_panic() {
-    let mut lx = Lexer::new("/* this never ends");
+    let mut lx = Lexer::new("/* this never ends", FileId::PRIMARY);
     let toks = lx.tokenize();
     assert_eq!(toks.len(), 1);
     assert!(matches!(toks[0].kind, TokenKind::Eof));
@@ -274,7 +274,7 @@ fn part3_very_long_string_literal_does_not_crash() {
 fn part3_backslash_at_end_of_file_is_never_a_panic() {
     // `\` with nothing after is not a valid line continuation (no newline)
     // but the lexer must return a token instead of crashing.
-    let mut lx = Lexer::new("int x = 1;\\");
+    let mut lx = Lexer::new("int x = 1;\\", FileId::PRIMARY);
     let toks = lx.tokenize();
     let _ = lx.take_diagnostics();
     assert!(matches!(toks.last().unwrap().kind, TokenKind::Eof));
@@ -288,13 +288,13 @@ fn part3_garbage_bytes_do_not_panic() {
     let nasty: Vec<u8> = (0u8..=255u8).collect();
     if let Ok(s) = std::str::from_utf8(&nasty) {
         // For ASCII-clean 0..127 we can feed directly.
-        let toks = Lexer::new(s).tokenize();
+        let toks = Lexer::new(s, FileId::PRIMARY).tokenize();
         assert!(matches!(toks.last().unwrap().kind, TokenKind::Eof));
     }
     // Feed a string that includes valid UTF-8 but lots of structurally
     // odd characters.  The lexer should return.
     let odd = "\u{0000}\u{0001}\u{0007}\u{001B}\u{00A0}é漢字\u{10FFFF}";
-    let toks = Lexer::new(odd).tokenize();
+    let toks = Lexer::new(odd, FileId::PRIMARY).tokenize();
     assert!(matches!(toks.last().unwrap().kind, TokenKind::Eof));
 }
 

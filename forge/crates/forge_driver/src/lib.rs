@@ -51,7 +51,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-pub use forge_diagnostics::{Diagnostic, Severity};
+pub use forge_diagnostics::{Diagnostic, FileId, Severity, SourceMap};
 pub use forge_lexer::{Lexer, Token, TokenKind};
 pub use forge_parser::printer::print_ast;
 pub use forge_parser::{Parser, TranslationUnit};
@@ -254,6 +254,11 @@ pub struct CompileOutput {
     /// source with any CLI-synthesised prelude prepended.  Diagnostic
     /// rendering uses this so spans stay valid.
     pub effective_source: String,
+    /// Registry of every source file seen during compilation (root plus
+    /// every `#include`d header).  Passed to
+    /// [`render_diagnostics`](forge_diagnostics::render_diagnostics) so
+    /// multi-file spans render against the correct file.
+    pub source_map: SourceMap,
 }
 
 impl CompileOutput {
@@ -311,7 +316,7 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
     };
 
     // ---- Lex.
-    let mut lexer = Lexer::new(&effective_source);
+    let mut lexer = Lexer::new(&effective_source, FileId::PRIMARY);
     let tokens = lexer.tokenize();
     let mut diagnostics = lexer.take_diagnostics();
 
@@ -377,6 +382,7 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
         _ => (None, None),
     };
 
+    let source_map = pp.into_source_map();
     CompileOutput {
         tokens: pp_tokens,
         ast,
@@ -384,6 +390,7 @@ pub fn compile(filename: &str, source: &str, options: &CompileOptions) -> Compil
         symbol_table,
         diagnostics,
         effective_source,
+        source_map,
     }
 }
 

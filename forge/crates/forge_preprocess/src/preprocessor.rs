@@ -28,7 +28,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use forge_diagnostics::{Diagnostic, Severity};
+use forge_diagnostics::{Diagnostic, FileId, Severity, SourceMap};
 use forge_lexer::{lex_fragment, IntSuffix, Lexer, Span, StringPrefix, Token, TokenKind};
 
 use crate::cond_expr::{self, PPValue};
@@ -114,6 +114,18 @@ pub struct Preprocessor {
     /// the stand-alone [`preprocess`] entry point can report failure
     /// even if the caller drains warnings mid-run.
     has_errors: bool,
+    /// Registry of every source file the preprocessor has handed tokens
+    /// to, keyed by [`FileId`].  The translation-unit root is registered
+    /// at the start of each `run_with_source*` call; every successful
+    /// `#include` appends its header.  Diagnostic rendering looks up
+    /// file names and source text through this map, so a span whose
+    /// `file` field points at a header renders against that header's
+    /// text rather than the root file's.
+    source_map: SourceMap,
+    /// [`FileId`] of the file currently being emitted from — swapped on
+    /// every `#include` boundary so that synthetic tokens
+    /// (e.g. `__LINE__` expansions) carry the correct file id.
+    current_file_id: FileId,
 }
 
 impl Preprocessor {
@@ -150,9 +162,42 @@ impl Preprocessor {
             output: Vec::new(),
             diagnostics: Vec::new(),
             has_errors: false,
+            source_map: SourceMap::new(),
+            current_file_id: FileId::INVALID,
         };
         pp.install_predefined_macros(&predefined_macros);
         pp
+    }
+
+    /// Borrow the accumulating [`SourceMap`].
+    ///
+    /// The translation-unit root is registered on every
+    /// `run_with_source*` entry, and each successful `#include`
+    /// appends its header to the map — so after a run completes, the
+    /// map contains every file whose tokens appear in the emitted
+    /// stream.  Diagnostic rendering (via
+    /// [`forge_diagnostics::render_diagnostics`]) consults this map to
+    /// resolve a span's [`FileId`] to a name and text.
+    pub fn source_map(&self) -> &SourceMap {
+        &self.source_map
+    }
+
+    /// Mutable borrow of the accumulating [`SourceMap`].
+    ///
+    /// Chiefly useful to the driver, which may pre-register files
+    /// before handing tokens to the preprocessor so the tokens' spans
+    /// and the map agree on every file id.
+    pub fn source_map_mut(&mut self) -> &mut SourceMap {
+        &mut self.source_map
+    }
+
+    /// Consume the preprocessor and return its [`SourceMap`].
+    ///
+    /// Callers that no longer need the rest of the preprocessor state —
+    /// the driver at the end of a compile, for instance — can call this
+    /// to avoid cloning the map.
+    pub fn into_source_map(self) -> SourceMap {
+        self.source_map
     }
 
     /// Immutable view of the macro table.  Primarily useful in tests and
@@ -210,7 +255,7 @@ impl Preprocessor {
     /// that want meaningful line/file information should use
     /// [`Preprocessor::run_with_source`] or [`Preprocessor::run_file`].
     pub fn run(&mut self, tokens: Vec<Token>) -> Vec<Token> {
-        self.run_impl(tokens, "", DEFAULT_INPUT_NAME, None)
+        self.run_impl(tokens, "", DEFAULT_INPUT_NAME, None, None)
     }
 
     /// Preprocess `tokens` that were lexed from `source`.
@@ -225,7 +270,7 @@ impl Preprocessor {
         source: &str,
         filename: &str,
     ) -> Vec<Token> {
-        self.run_impl(tokens, source, filename, None)
+        self.run_impl(tokens, source, filename, None, None)
     }
 
     /// Preprocess `tokens` as if they had been lexed from the file at
@@ -244,7 +289,7 @@ impl Preprocessor {
         filename: &str,
         root_path: PathBuf,
     ) -> Vec<Token> {
-        self.run_impl(tokens, source, filename, Some(root_path))
+        self.run_impl(tokens, source, filename, Some(root_path), None)
     }
 
     /// Read `path` from disk, lex it, and preprocess the result.
@@ -258,12 +303,15 @@ impl Preprocessor {
         let source = std::fs::read_to_string(path)?;
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let filename = canonical.display().to_string();
-        let mut lexer = Lexer::new(&source);
+        // Register the root file up-front so the lexer can stamp its
+        // [`FileId`] into every emitted span.
+        let file_id = self.source_map.add_file(filename.clone(), source.clone());
+        let mut lexer = Lexer::new(&source, file_id);
         let tokens = lexer.tokenize();
         for d in lexer.take_diagnostics() {
             self.diagnostics.push(d);
         }
-        Ok(self.run_impl(tokens, &source, &filename, Some(canonical)))
+        Ok(self.run_impl(tokens, &source, &filename, Some(canonical), Some(file_id)))
     }
 
     /// Private implementation shared by [`run`](Self::run),
@@ -279,6 +327,7 @@ impl Preprocessor {
         source: &str,
         filename: &str,
         root_path: Option<PathBuf>,
+        preregistered_file_id: Option<FileId>,
     ) -> Vec<Token> {
         // Pull the trailing EOF off the end so we can re-emit it after
         // `drive()` finishes — `drive()` itself swallows EOF silently
@@ -292,6 +341,23 @@ impl Preprocessor {
         self.output.clear();
         self.current_file = filename.to_string();
         self.line_starts = compute_line_starts(source);
+
+        // Ensure the root source is registered in the source map so
+        // diagnostic rendering can find its text.  `run_file` already
+        // pre-registers and passes the [`FileId`] down; callers that
+        // lexed the tokens themselves (the driver, most tests) leave
+        // `preregistered_file_id` as `None` and we register here.  The
+        // first `add_file` call on an empty map returns
+        // [`FileId::PRIMARY`], which matches what those callers' lexers
+        // stamped into every span — so the ids line up without further
+        // bookkeeping.
+        self.current_file_id = match preregistered_file_id {
+            Some(id) => id,
+            None => self
+                .source_map
+                .add_file(filename.to_string(), source.to_string()),
+        };
+
         let root_frame = match root_path {
             Some(p) => IncludeFrame::file(p, 0),
             None => IncludeFrame::new(filename, 0),
@@ -308,7 +374,7 @@ impl Preprocessor {
         // terminated stream.
         let eof = eof.unwrap_or(Token {
             kind: TokenKind::Eof,
-            span: Span::new(0, 0),
+            span: Span::new(self.current_file_id, 0, 0),
             at_start_of_line: true,
             has_leading_space: false,
         });
@@ -554,7 +620,7 @@ impl Preprocessor {
                     if expected_min == 1 { "" } else { "s" },
                     args.len()
                 ))
-                .span(lparen_span.range()),
+                .span(lparen_span),
             );
             return true;
         }
@@ -627,7 +693,7 @@ impl Preprocessor {
                         Diagnostic::error(format!(
                             "unterminated argument list invoking macro `{macro_name}`"
                         ))
-                        .span(lparen_span.range()),
+                        .span(lparen_span),
                     );
                     return None;
                 }
@@ -638,7 +704,7 @@ impl Preprocessor {
                     Diagnostic::error(format!(
                         "unterminated argument list invoking macro `{macro_name}`"
                     ))
-                    .span(lparen_span.range()),
+                    .span(lparen_span),
                 );
                 cursor.push_front(vec![tok]);
                 return None;
@@ -869,7 +935,7 @@ impl Preprocessor {
                 Diagnostic::warning(format!(
                     "pasting `{left_text}` and `{right_text}` does not give a valid preprocessing token"
                 ))
-                .span(hh_span.range())
+                .span(hh_span)
                 .note("the result will be kept as multiple tokens"),
             );
         }
@@ -987,7 +1053,7 @@ impl Preprocessor {
             Some(other) => {
                 self.diagnostics.push(
                     Diagnostic::error(format!("unknown preprocessing directive `#{other}`"))
-                        .span(name_tok.token.span.range())
+                        .span(name_tok.token.span)
                         .label("no directive with this name"),
                 );
                 cursor.skip_to_end_of_line();
@@ -995,7 +1061,7 @@ impl Preprocessor {
             None => {
                 self.diagnostics.push(
                     Diagnostic::error("expected preprocessing directive name after `#`")
-                        .span(name_tok.token.span.range()),
+                        .span(name_tok.token.span),
                 );
                 cursor.skip_to_end_of_line();
             }
@@ -1009,7 +1075,7 @@ impl Preprocessor {
         for frame in frames {
             self.diagnostics.push(
                 Diagnostic::error("unterminated `#if` block — missing `#endif`")
-                    .span(frame.if_location.range())
+                    .span(frame.if_location)
                     .label("conditional opened here"),
             );
         }
@@ -1091,14 +1157,14 @@ impl Preprocessor {
 
         if self.if_stack.is_empty() {
             self.diagnostics
-                .push(Diagnostic::error("`#elif` without matching `#if`").span(elif_span.range()));
+                .push(Diagnostic::error("`#elif` without matching `#if`").span(elif_span));
             return;
         }
 
         let top = self.if_stack.len() - 1;
         if self.if_stack[top].else_seen {
             self.diagnostics
-                .push(Diagnostic::error("`#elif` after `#else`").span(elif_span.range()));
+                .push(Diagnostic::error("`#elif` after `#else`").span(elif_span));
             self.if_stack[top].current_branch_active = false;
             return;
         }
@@ -1126,15 +1192,14 @@ impl Preprocessor {
 
         if self.if_stack.is_empty() {
             self.diagnostics
-                .push(Diagnostic::error("`#else` without matching `#if`").span(else_span.range()));
+                .push(Diagnostic::error("`#else` without matching `#if`").span(else_span));
             return;
         }
 
         let top = self.if_stack.len() - 1;
         if self.if_stack[top].else_seen {
             self.diagnostics.push(
-                Diagnostic::error("duplicate `#else` in the same `#if` block")
-                    .span(else_span.range()),
+                Diagnostic::error("duplicate `#else` in the same `#if` block").span(else_span),
             );
             return;
         }
@@ -1158,9 +1223,8 @@ impl Preprocessor {
         let endif_span = name_tok.span;
         cursor.skip_to_end_of_line();
         if self.if_stack.pop().is_none() {
-            self.diagnostics.push(
-                Diagnostic::error("`#endif` without matching `#if`").span(endif_span.range()),
-            );
+            self.diagnostics
+                .push(Diagnostic::error("`#endif` without matching `#if`").span(endif_span));
         }
     }
 
@@ -1268,7 +1332,7 @@ impl Preprocessor {
                                     Diagnostic::error(
                                         "expected `)` after identifier in `defined(...)`",
                                     )
-                                    .span(tok.token.span.range()),
+                                    .span(tok.token.span),
                                 );
                             }
                         }
@@ -1284,7 +1348,7 @@ impl Preprocessor {
                 None => {
                     self.diagnostics.push(
                         Diagnostic::error("`defined` requires an identifier operand")
-                            .span(tok.token.span.range()),
+                            .span(tok.token.span),
                     );
                     out.push(PPToken::new(replacement_int_literal(&tok.token, 0)));
                     i += 1;
@@ -1321,7 +1385,7 @@ impl Preprocessor {
             if !matches!(tokens.get(j).map(|t| t.kind()), Some(TokenKind::LeftParen)) {
                 self.diagnostics.push(
                     Diagnostic::error("`__has_include` requires a parenthesised argument")
-                        .span(tok.token.span.range()),
+                        .span(tok.token.span),
                 );
                 out.push(PPToken::new(replacement_int_literal(&tok.token, 0)));
                 i += 1;
@@ -1353,7 +1417,7 @@ impl Preprocessor {
             if depth != 0 {
                 self.diagnostics.push(
                     Diagnostic::error("unterminated `__has_include(...)` argument list")
-                        .span(tok.token.span.range()),
+                        .span(tok.token.span),
                 );
                 out.push(PPToken::new(replacement_int_literal(&tok.token, 0)));
                 i = j;
@@ -1375,7 +1439,7 @@ impl Preprocessor {
                         Diagnostic::error(
                             "`__has_include` argument must be `<header>` or `\"header\"`",
                         )
-                        .span(tok.token.span.range()),
+                        .span(tok.token.span),
                     );
                     0
                 }
@@ -1451,7 +1515,7 @@ impl Preprocessor {
             if !macros_equivalent(existing, &new_def) {
                 self.diagnostics.push(
                     Diagnostic::warning(format!("`{name}` redefined"))
-                        .span(name_tok.span.range())
+                        .span(name_tok.span)
                         .label("redefinition differs from the previous definition"),
                 );
             }
@@ -1487,7 +1551,7 @@ impl Preprocessor {
                     Diagnostic::error(format!(
                         "unterminated parameter list in `#define {macro_name}`"
                     ))
-                    .span(name_tok.span.range())
+                    .span(name_tok.span)
                     .label("macro name declared here"),
                 );
                 return None;
@@ -1498,7 +1562,7 @@ impl Preprocessor {
                     Diagnostic::error(format!(
                         "unterminated parameter list in `#define {macro_name}`"
                     ))
-                    .span(name_tok.span.range())
+                    .span(name_tok.span)
                     .label("macro name declared here"),
                 );
                 // Put the token back so the main loop re-enters on the
@@ -1520,7 +1584,7 @@ impl Preprocessor {
                                 Diagnostic::error(
                                     "`...` must be the last element of a macro parameter list",
                                 )
-                                .span(tok_span.range()),
+                                .span(tok_span),
                             );
                             if let Some(t) = other {
                                 cursor.push_front(vec![t]);
@@ -1536,7 +1600,7 @@ impl Preprocessor {
                             Diagnostic::warning(format!(
                                 "duplicate macro parameter `{param_name}`"
                             ))
-                            .span(tok_span.range()),
+                            .span(tok_span),
                         );
                     }
                     params.push(param_name);
@@ -1552,7 +1616,7 @@ impl Preprocessor {
                                 Diagnostic::error(format!(
                                     "expected `,` or `)` in parameter list of `#define {macro_name}`"
                                 ))
-                                .span(tok_span.range()),
+                                .span(tok_span),
                             );
                             if let Some(t) = other {
                                 cursor.push_front(vec![t]);
@@ -1567,7 +1631,7 @@ impl Preprocessor {
                         Diagnostic::error(format!(
                             "expected a parameter name in `#define {macro_name}`"
                         ))
-                        .span(tok_span.range()),
+                        .span(tok_span),
                     );
                     cursor.skip_to_end_of_line();
                     return None;
@@ -1612,13 +1676,13 @@ impl Preprocessor {
     ) -> Option<Token> {
         let Some(tok) = cursor.advance() else {
             self.diagnostics
-                .push(Diagnostic::error(missing_msg.to_string()).span(anchor.span.range()));
+                .push(Diagnostic::error(missing_msg.to_string()).span(anchor.span));
             return None;
         };
 
         if tok.at_start_of_line() || matches!(tok.kind(), TokenKind::Eof) {
             self.diagnostics
-                .push(Diagnostic::error(missing_msg.to_string()).span(anchor.span.range()));
+                .push(Diagnostic::error(missing_msg.to_string()).span(anchor.span));
             cursor.push_front(vec![tok]);
             return None;
         }
@@ -1626,7 +1690,7 @@ impl Preprocessor {
         if !tok.kind().is_identifier_like() {
             self.diagnostics.push(
                 Diagnostic::error(format!("{missing_msg} (found a non-identifier token)"))
-                    .span(tok.token.span.range()),
+                    .span(tok.token.span),
             );
             cursor.skip_to_end_of_line();
             return None;
@@ -1828,7 +1892,7 @@ impl Preprocessor {
                 value: value.to_string(),
                 prefix: StringPrefix::None,
             },
-            span: Span::new(0, 0),
+            span: Span::new(FileId::INVALID, 0, 0),
             at_start_of_line: false,
             has_leading_space: false,
         };
@@ -1865,7 +1929,7 @@ impl Preprocessor {
             None => {
                 self.diagnostics.push(
                     Diagnostic::error("`_Pragma` requires a string-literal argument")
-                        .span(anchor_span.range()),
+                        .span(anchor_span),
                 );
                 return true;
             }
@@ -1875,7 +1939,7 @@ impl Preprocessor {
             _ => {
                 self.diagnostics.push(
                     Diagnostic::error("`_Pragma` requires a string-literal argument")
-                        .span(literal.token.span.range()),
+                        .span(literal.token.span),
                 );
                 return true;
             }
@@ -1887,7 +1951,7 @@ impl Preprocessor {
             Some(other) => {
                 self.diagnostics.push(
                     Diagnostic::error("expected `)` to close `_Pragma` operator")
-                        .span(other.token.span.range()),
+                        .span(other.token.span),
                 );
                 // Put the stray token back so the main loop can
                 // continue; we have already consumed the bulk of the
@@ -1898,7 +1962,7 @@ impl Preprocessor {
             None => {
                 self.diagnostics.push(
                     Diagnostic::error("unterminated `_Pragma` operator — missing `)`")
-                        .span(anchor_span.range()),
+                        .span(anchor_span),
                 );
                 return true;
             }
@@ -2010,7 +2074,7 @@ impl Preprocessor {
                     header,
                     if is_system { "system" } else { "quote" }
                 ))
-                .span(hash.span.range())
+                .span(hash.span)
                 .label("no file matched any configured search path"),
             );
             return;
@@ -2068,7 +2132,7 @@ impl Preprocessor {
                     "`#include` nesting too deep (limit: {})",
                     self.max_include_depth
                 ))
-                .span(hash.span.range())
+                .span(hash.span)
                 .label("including this file would exceed the include-depth limit"),
             );
             return false;
@@ -2101,7 +2165,7 @@ impl Preprocessor {
                     "circular `#include` detected while including `{}`",
                     resolved.display()
                 ))
-                .span(hash.span.range()),
+                .span(hash.span),
             );
             return;
         }
@@ -2112,12 +2176,20 @@ impl Preprocessor {
             Err(err) => {
                 self.diagnostics.push(
                     Diagnostic::error(format!("failed to read `{}`: {err}", resolved.display()))
-                        .span(hash.span.range()),
+                        .span(hash.span),
                 );
                 return;
             }
         };
-        let mut lexer = Lexer::new(&source);
+        // Register the header with the source map before lexing so
+        // every token produced for it is stamped with this header's
+        // [`FileId`].  Diagnostics raised against these tokens will
+        // render against the header's own text, not the including
+        // file's.
+        let header_file_id = self
+            .source_map
+            .add_file(resolved.display().to_string(), source.clone());
+        let mut lexer = Lexer::new(&source, header_file_id);
         let inner_tokens = lexer.tokenize();
         for d in lexer.take_diagnostics() {
             self.diagnostics.push(d);
@@ -2140,6 +2212,7 @@ impl Preprocessor {
             std::mem::replace(&mut self.line_starts, compute_line_starts(&source));
         let saved_line_offset = self.line_offset.take();
         let saved_file_override = self.file_override.take();
+        let saved_file_id = std::mem::replace(&mut self.current_file_id, header_file_id);
         let new_depth = self.include_stack.last().map(|f| f.depth).unwrap_or(0) + 1;
         self.include_stack
             .push(IncludeFrame::file(resolved.clone(), new_depth));
@@ -2161,6 +2234,7 @@ impl Preprocessor {
         self.line_starts = saved_line_starts;
         self.line_offset = saved_line_offset;
         self.file_override = saved_file_override;
+        self.current_file_id = saved_file_id;
 
         if has_guard {
             self.pragma_once_files.insert(resolved);
@@ -2193,7 +2267,7 @@ impl Preprocessor {
         if filtered.is_empty() {
             self.diagnostics.push(
                 Diagnostic::error("`#include` expects `<filename>` or `\"filename\"`")
-                    .span(hash.span.range()),
+                    .span(hash.span),
             );
             return None;
         }
@@ -2209,8 +2283,7 @@ impl Preprocessor {
         }
 
         self.diagnostics.push(
-            Diagnostic::error("`#include` expects `<filename>` or `\"filename\"`")
-                .span(hash.span.range()),
+            Diagnostic::error("`#include` expects `<filename>` or `\"filename\"`").span(hash.span),
         );
         None
     }
@@ -2361,8 +2434,7 @@ impl Preprocessor {
         if matches!(&first.token.kind, TokenKind::Identifier(s) if s == "message") {
             if let Some(text) = pragma_message_text(&filtered[1..]) {
                 self.diagnostics.push(
-                    Diagnostic::note_diag(format!("#pragma message: {text}"))
-                        .span(anchor_span.range()),
+                    Diagnostic::note_diag(format!("#pragma message: {text}")).span(anchor_span),
                 );
             }
         }
@@ -2382,7 +2454,7 @@ impl Preprocessor {
             format!("#error: {message}")
         };
         self.diagnostics
-            .push(Diagnostic::error(text).span(hash.span.range()));
+            .push(Diagnostic::error(text).span(hash.span));
         self.has_errors = true;
     }
 
@@ -2399,7 +2471,7 @@ impl Preprocessor {
             format!("#warning: {message}")
         };
         self.diagnostics
-            .push(Diagnostic::warning(text).span(hash.span.range()));
+            .push(Diagnostic::warning(text).span(hash.span));
     }
 
     /// Handle `#line NUMBER` and `#line NUMBER "FILENAME"`.
@@ -2427,7 +2499,7 @@ impl Preprocessor {
         if filtered.is_empty() {
             self.diagnostics.push(
                 Diagnostic::error("`#line` requires at least a line-number argument")
-                    .span(hash.span.range()),
+                    .span(hash.span),
             );
             return;
         }
@@ -2438,7 +2510,7 @@ impl Preprocessor {
             _ => {
                 self.diagnostics.push(
                     Diagnostic::error("`#line` expects an integer line number")
-                        .span(filtered[0].token.span.range())
+                        .span(filtered[0].token.span)
                         .label("line number must be a positive integer literal"),
                 );
                 return;
@@ -2449,7 +2521,7 @@ impl Preprocessor {
                 Diagnostic::error(format!(
                     "invalid line number `{number}` in `#line` directive"
                 ))
-                .span(filtered[0].token.span.range())
+                .span(filtered[0].token.span)
                 .label("line number must be in the range 1..=2147483647"),
             );
             return;
@@ -2464,7 +2536,7 @@ impl Preprocessor {
                 _ => {
                     self.diagnostics.push(
                         Diagnostic::error("`#line` filename argument must be a string literal")
-                            .span(tok.token.span.range()),
+                            .span(tok.token.span),
                     );
                     return;
                 }
@@ -2473,7 +2545,7 @@ impl Preprocessor {
         if filtered.len() > 2 {
             self.diagnostics.push(
                 Diagnostic::error("extra tokens at end of `#line` directive")
-                    .span(filtered[2].token.span.range()),
+                    .span(filtered[2].token.span),
             );
             // Diagnose but still apply the line-number change — matches
             // GCC's "extra tokens" warning-and-continue behaviour.

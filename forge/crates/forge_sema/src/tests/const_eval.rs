@@ -19,7 +19,7 @@ use crate::types::EnumTypeId;
 
 use super::helpers::{int, q, ti};
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 // ---------------------------------------------------------------------

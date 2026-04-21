@@ -17,7 +17,7 @@ use crate::types::{
 
 use super::helpers::{int, ptr_to, q, ti};
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 
 fn ident(name: &str, id: u32) -> Expr {
     Expr::Ident {

@@ -20,7 +20,7 @@ use super::helpers::{
     t_double, t_float, ti, uint, ullong, ulong, ushort, void,
 };
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 fn specs(ts: Vec<TypeSpecifierToken>) -> DeclSpecifiers {

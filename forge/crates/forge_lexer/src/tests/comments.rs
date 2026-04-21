@@ -45,7 +45,7 @@ fn block_comment_spanning_lines_sets_start_of_line() {
 #[test]
 fn unterminated_block_comment_reaches_eof() {
     // No panic; current phase silently stops at EOF.
-    let toks = Lexer::new("/* open ").tokenize();
+    let toks = Lexer::new("/* open ", FileId::PRIMARY).tokenize();
     assert_eq!(toks.len(), 1);
     assert!(matches!(toks[0].kind, TokenKind::Eof));
 }

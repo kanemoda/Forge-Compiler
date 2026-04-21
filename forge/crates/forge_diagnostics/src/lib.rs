@@ -25,34 +25,85 @@
 //! / [`render_diagnostics_to_string`] functions, which use the `ariadne` crate
 //! to produce human-readable, source-annotated error messages.
 //!
+//! # Span type
+//!
+//! Every diagnostic and label carries a [`Span`] that includes the
+//! [`FileId`] of the source it references, so a single diagnostic can
+//! point at labels across `#include`-expanded files. The renderer
+//! consults the supplied [`SourceMap`] to turn those ids back into file
+//! names and source text.
+//!
 //! # Builder pattern
 //!
 //! Diagnostics are constructed via a fluent builder API.  Calling
 //! `Diagnostic::error` / `Diagnostic::warning` creates a diagnostic with only
 //! a message.  The primary source span is attached with `.span()`, after which
-//! `.label()`, `.label_at()`, and `.note()` can be chained:
-//!
-//! ```
-//! use forge_diagnostics::{Diagnostic, Severity};
-//!
-//! let source = "int main() { return 0 }";
-//! let diag = Diagnostic::error("expected ';' after return statement")
-//!     .span(21..22)
-//!     .label("expected ';' here")
-//!     .note("every statement in C must end with a semicolon");
-//!
-//! assert_eq!(diag.severity, Severity::Error);
-//! assert_eq!(diag.span, 21..22);
-//! ```
+//! `.label()`, `.label_at()`, and `.note()` can be chained.
 
+use std::fmt;
 use std::io::IsTerminal;
 use std::ops::Range;
 
-use ariadne::{Color, Config, Label as AriadneLabel, Report, ReportKind, Source};
+use ariadne::{Cache, Color, Config, Label as AriadneLabel, Report, ReportKind, Source};
 
 pub mod source_map;
 
 pub use source_map::{FileId, SourceFile, SourceMap};
+
+// ---------------------------------------------------------------------------
+// Span
+// ---------------------------------------------------------------------------
+
+/// A byte range inside a specific source file.
+///
+/// `Span` is the shared span type between the lexer, preprocessor, parser,
+/// and diagnostics layers. It lives in `forge_diagnostics` (and is
+/// re-exported from `forge_lexer`) so every crate above the lexer sees
+/// the same representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Span {
+    /// The file this span points into.
+    pub file: FileId,
+    /// Inclusive start byte offset.
+    pub start: u32,
+    /// Exclusive end byte offset.
+    pub end: u32,
+}
+
+impl Span {
+    /// Build a span pointing into the given file.
+    pub const fn new(file: FileId, start: u32, end: u32) -> Self {
+        Self { file, start, end }
+    }
+
+    /// Convenience for tests and single-file fixtures: build a span in
+    /// the primary (first) file of a `SourceMap`.
+    pub const fn primary(start: u32, end: u32) -> Self {
+        Self::new(FileId::PRIMARY, start, end)
+    }
+
+    /// Byte length of the span.
+    pub const fn len(&self) -> u32 {
+        self.end - self.start
+    }
+
+    /// Whether the span covers zero bytes.
+    pub const fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    /// Convert to a `Range<usize>` for APIs (e.g., `ariadne`) that still
+    /// want a raw byte range.
+    pub fn range(&self) -> Range<usize> {
+        self.start as usize..self.end as usize
+    }
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}..{}", self.file.0, self.start, self.end)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -72,33 +123,23 @@ pub enum Severity {
 /// A source-level label pointing to a specific span with an explanatory message.
 #[derive(Debug, Clone)]
 pub struct Label {
-    /// The byte range in the source file this label points to.
-    pub span: Range<usize>,
+    /// The source span this label points to.
+    pub span: Span,
     /// The message displayed alongside the underlined span.
     pub message: String,
 }
 
 /// A single compiler diagnostic (error, warning, or note).
-///
-/// Use the fluent builder methods to construct diagnostics:
-///
-/// ```
-/// use forge_diagnostics::Diagnostic;
-///
-/// let diag = Diagnostic::error("expected ';'")
-///     .span(21..22)
-///     .label("expected ';' here")
-///     .note("every statement in C must end with a semicolon");
-/// ```
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     /// The primary human-readable message describing what went wrong.
     pub message: String,
-    /// The primary byte-range span in the source file.
+    /// The primary source span.
     ///
-    /// Defaults to `0..0` when the diagnostic has not yet had a span attached
-    /// via [`.span()`](Diagnostic::span).
-    pub span: Range<usize>,
+    /// Defaults to an all-zero span pointing at [`FileId::INVALID`] when
+    /// the diagnostic has not yet had a span attached via
+    /// [`.span()`](Diagnostic::span).
+    pub span: Span,
     /// How severe this diagnostic is.
     pub severity: Severity,
     /// Additional source labels pointing at relevant locations.
@@ -113,9 +154,6 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     /// Start building an **error** diagnostic with the given message.
-    ///
-    /// Chain [`.span()`](Self::span) to attach a source location, then
-    /// optionally [`.label()`](Self::label) and [`.note()`](Self::note).
     pub fn error(message: impl Into<String>) -> Self {
         Self::new(Severity::Error, message)
     }
@@ -133,7 +171,7 @@ impl Diagnostic {
     fn new(severity: Severity, message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            span: 0..0,
+            span: Span::new(FileId::INVALID, 0, 0),
             severity,
             labels: Vec::new(),
             notes: Vec::new(),
@@ -141,34 +179,23 @@ impl Diagnostic {
     }
 
     /// Set the primary source span and return `self` for chaining.
-    ///
-    /// This also **replaces the span on any previously added labels** that
-    /// still carry the default `0..0` span, so it is safe to call `.span()`
-    /// after `.label()` if you prefer that order.
-    pub fn span(mut self, span: Range<usize>) -> Self {
+    pub fn span(mut self, span: Span) -> Self {
         self.span = span;
         self
     }
 
     /// Add a label pointing at the **primary span** with the given message,
     /// and return `self` for chaining.
-    ///
-    /// Call [`.span()`](Self::span) before `.label()` so the span is known.
-    /// If you need a label at a *different* location use
-    /// [`.label_at()`](Self::label_at) instead.
     pub fn label(mut self, message: impl Into<String>) -> Self {
         self.labels.push(Label {
-            span: self.span.clone(),
+            span: self.span,
             message: message.into(),
         });
         self
     }
 
     /// Add a label at an **explicit span** and return `self` for chaining.
-    ///
-    /// Use this when the label should point somewhere other than the primary
-    /// span — for example, to highlight a conflicting declaration.
-    pub fn label_at(mut self, span: Range<usize>, message: impl Into<String>) -> Self {
+    pub fn label_at(mut self, span: Span, message: impl Into<String>) -> Self {
         self.labels.push(Label {
             span,
             message: message.into(),
@@ -177,9 +204,6 @@ impl Diagnostic {
     }
 
     /// Append a free-form note and return `self` for chaining.
-    ///
-    /// Notes appear below the source snippet, making them a good place for
-    /// suggestions or references to relevant language rules.
     pub fn note(mut self, message: impl Into<String>) -> Self {
         self.notes.push(message.into());
         self
@@ -190,49 +214,70 @@ impl Diagnostic {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Render a slice of diagnostics to **stderr**.
+/// Render a slice of diagnostics to **stderr** using the given
+/// [`SourceMap`] as the lookup table for file names and source text.
 ///
-/// ANSI colour codes are emitted only when stderr is attached to a terminal —
-/// when it is piped to a file or captured by a test harness, the output is
-/// plain text so downstream substring matchers (e.g. the lit-style test
-/// runner) are not fooled by escape sequences inside the rendered message.
-///
-/// This is the standard production path.  For testing or LSP use,
-/// call [`render_diagnostics_to_string`] instead.
-pub fn render_diagnostics(source: &str, filename: &str, diagnostics: &[Diagnostic]) {
+/// ANSI colour codes are emitted only when stderr is attached to a
+/// terminal.
+pub fn render_diagnostics(source_map: &SourceMap, diagnostics: &[Diagnostic]) {
     let use_color = std::io::stderr().is_terminal();
     for diag in diagnostics {
-        write_report(diag, filename, source, &mut std::io::stderr(), use_color)
+        write_report(diag, source_map, &mut std::io::stderr(), use_color)
             .expect("failed to write diagnostic to stderr");
     }
 }
 
 /// Render a slice of diagnostics to a [`String`] without ANSI colour codes.
-///
-/// This is intended for unit tests and any consumer that needs the rendered
-/// text as a plain string (e.g., an LSP server building hover messages).
-pub fn render_diagnostics_to_string(
-    source: &str,
-    filename: &str,
-    diagnostics: &[Diagnostic],
-) -> String {
+pub fn render_diagnostics_to_string(source_map: &SourceMap, diagnostics: &[Diagnostic]) -> String {
     let mut buf: Vec<u8> = Vec::new();
     for diag in diagnostics {
-        write_report(diag, filename, source, &mut buf, false)
+        write_report(diag, source_map, &mut buf, false)
             .expect("failed to write diagnostic to buffer");
     }
     String::from_utf8(buf).unwrap_or_default()
 }
 
+/// ariadne `Cache` adapter over a `SourceMap`, keyed by `FileId`.
+struct SourceMapCache<'a> {
+    map: &'a SourceMap,
+    sources: std::collections::HashMap<FileId, Source<String>>,
+}
+
+impl<'a> SourceMapCache<'a> {
+    fn new(map: &'a SourceMap) -> Self {
+        Self {
+            map,
+            sources: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl Cache<FileId> for SourceMapCache<'_> {
+    type Storage = String;
+
+    fn fetch(&mut self, id: &FileId) -> Result<&Source<String>, Box<dyn fmt::Debug + '_>> {
+        let src = self
+            .map
+            .get(*id)
+            .map(|sf| sf.source.clone())
+            .unwrap_or_default();
+        let entry = self.sources.entry(*id).or_insert_with(|| Source::from(src));
+        Ok(entry)
+    }
+
+    fn display<'b>(&self, id: &'b FileId) -> Option<Box<dyn fmt::Display + 'b>> {
+        let name = self
+            .map
+            .get(*id)
+            .map_or_else(|| "<unknown>".to_string(), |sf| sf.name.clone());
+        Some(Box::new(name))
+    }
+}
+
 /// Core rendering helper shared by the public render functions.
-///
-/// Builds an ariadne [`Report`] from a [`Diagnostic`] and writes it to
-/// the given [`std::io::Write`] sink.  `color` controls whether ANSI escape
-/// codes are emitted.
 fn write_report(
     diag: &Diagnostic,
-    filename: &str,
-    source: &str,
+    source_map: &SourceMap,
     writer: &mut dyn std::io::Write,
     color: bool,
 ) -> std::io::Result<()> {
@@ -248,11 +293,11 @@ fn write_report(
         Severity::Note => Color::Blue,
     };
 
-    let mut builder = Report::build(kind, filename, diag.span.start)
+    let mut builder = Report::build(kind, diag.span.file, diag.span.start as usize)
         .with_config(Config::default().with_color(color))
         .with_message(&diag.message)
         .with_label(
-            AriadneLabel::new((filename, diag.span.clone()))
+            AriadneLabel::new((diag.span.file, diag.span.range()))
                 .with_message(&diag.message)
                 .with_color(primary_color),
         );
@@ -260,7 +305,7 @@ fn write_report(
     for (i, label) in diag.labels.iter().enumerate() {
         let label_color = if i == 0 { primary_color } else { Color::Cyan };
         builder = builder.with_label(
-            AriadneLabel::new((filename, label.span.clone()))
+            AriadneLabel::new((label.span.file, label.span.range()))
                 .with_message(&label.message)
                 .with_color(label_color),
         );
@@ -270,9 +315,8 @@ fn write_report(
         builder = builder.with_note(note);
     }
 
-    builder
-        .finish()
-        .write((filename, Source::from(source)), writer)
+    let mut cache = SourceMapCache::new(source_map);
+    builder.finish().write(&mut cache, writer)
 }
 
 // ---------------------------------------------------------------------------

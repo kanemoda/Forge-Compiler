@@ -1,6 +1,6 @@
 //! `#if`/`#ifdef`/`#elif`/`#else` flow plus `cond_expr::evaluate` behaviour.
 
-use forge_diagnostics::{Diagnostic, Severity};
+use forge_diagnostics::{Diagnostic, FileId, Severity};
 use forge_lexer::{Lexer, Span, Token, TokenKind};
 
 use super::helpers::*;
@@ -315,7 +315,7 @@ fn elif_expression_is_not_evaluated_when_inside_skipped_group() {
 // -----------------------------------------------------------------
 
 fn lex_cond(src: &str) -> Vec<Token> {
-    let mut toks = Lexer::new(src).tokenize();
+    let mut toks = Lexer::new(src, FileId::PRIMARY).tokenize();
     // Drop the trailing Eof so expression-parser tests see a clean
     // stream; the parser also treats the absent sentinel as
     // end-of-input.
@@ -327,7 +327,7 @@ fn lex_cond(src: &str) -> Vec<Token> {
 
 fn eval(src: &str) -> (PPValue, Vec<Diagnostic>) {
     let tokens = lex_cond(src);
-    evaluate(&tokens, Span::new(0, 0))
+    evaluate(&tokens, Span::primary(0, 0))
 }
 
 fn eval_value(src: &str) -> PPValue {

@@ -21,7 +21,7 @@ use crate::types::{QualType, StructLayout, StructTypeId, Type, UnionLayout, Unio
 
 use super::helpers::ti;
 
-const S: Span = Span::new(0, 0);
+const S: Span = Span::primary(0, 0);
 const N: NodeId = NodeId::DUMMY;
 
 // ---------------------------------------------------------------------
