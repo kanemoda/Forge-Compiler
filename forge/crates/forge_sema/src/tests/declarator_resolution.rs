@@ -278,6 +278,7 @@ fn void_parameter_is_a_prototype_with_zero_params() {
         specifiers: specs(vec![TypeSpecifierToken::Void]),
         declarator: None,
         span: S,
+        abstract_declarator: None,
     };
     let f = DirectDeclarator::Function {
         base: Box::new(ident("f")),
@@ -305,6 +306,7 @@ fn function_taking_two_ints() {
         specifiers: specs(vec![TypeSpecifierToken::Int]),
         declarator: Some(decl(ident(name))),
         span: S,
+        abstract_declarator: None,
     };
     let f = DirectDeclarator::Function {
         base: Box::new(ident("add")),
@@ -351,6 +353,7 @@ fn pointer_to_function_int_int_returning_int() {
         specifiers: specs(vec![TypeSpecifierToken::Int]),
         declarator: None,
         span: S,
+        abstract_declarator: None,
     };
     let fp_direct = DirectDeclarator::Function {
         base: Box::new(DirectDeclarator::Parenthesized(Box::new(inner))),
@@ -401,6 +404,7 @@ fn canonical_signal_declarator() {
                 specifiers: specs(vec![TypeSpecifierToken::Int]),
                 declarator: None,
                 span: S,
+                abstract_declarator: None,
             }],
             is_variadic: false,
             span: S,
@@ -420,6 +424,7 @@ fn canonical_signal_declarator() {
         specifiers: specs(vec![TypeSpecifierToken::Int]),
         declarator: None,
         span: S,
+        abstract_declarator: None,
     };
     // Param 2: void (*)(int) - abstract declarator on a param.
     // Parser-level ParamDecl uses Declarator for named params; for an
@@ -450,6 +455,7 @@ fn canonical_signal_declarator() {
             specifiers: specs(vec![TypeSpecifierToken::Int]),
             declarator: None,
             span: S,
+            abstract_declarator: None,
         }],
         is_variadic: false,
         span: S,
@@ -458,6 +464,7 @@ fn canonical_signal_declarator() {
         specifiers: specs(vec![TypeSpecifierToken::Void]),
         declarator: Some(decl(handler_direct)),
         span: S,
+        abstract_declarator: None,
     };
 
     // signal(int, handler)
@@ -480,6 +487,7 @@ fn canonical_signal_declarator() {
             specifiers: specs(vec![TypeSpecifierToken::Int]),
             declarator: None,
             span: S,
+            abstract_declarator: None,
         }],
         is_variadic: false,
         span: S,
@@ -572,6 +580,7 @@ fn array_param(
             is_static,
             span: S,
         })),
+        abstract_declarator: None,
         span: S,
     }
 }
@@ -713,6 +722,7 @@ fn function_typed_parameter_decays_to_pointer() {
             specifiers: specs(vec![TypeSpecifierToken::Int]),
             declarator: None,
             span: S,
+            abstract_declarator: None,
         }],
         is_variadic: false,
         span: S,
@@ -721,6 +731,7 @@ fn function_typed_parameter_decays_to_pointer() {
         specifiers: specs(vec![TypeSpecifierToken::Int]),
         declarator: Some(decl(inner)),
         span: S,
+        abstract_declarator: None,
     };
     let pt = resolve_single_param(p);
     assert!(matches!(pt.ty.ty, Type::Pointer { .. }));

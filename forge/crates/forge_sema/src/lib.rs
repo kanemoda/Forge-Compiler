@@ -28,6 +28,7 @@
 //!   functions every arithmetic expression goes through.
 //! * [`are_compatible`] / [`composite_type`] — C17 §6.2.7.
 
+pub(crate) mod address_taken;
 pub mod const_eval;
 pub mod context;
 pub mod declare;

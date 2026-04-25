@@ -69,6 +69,7 @@ fn declare_fn(table: &mut SymbolTable, name: &str, ty: QualType, ctx: &mut SemaC
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     table.declare(sym, ctx).expect("declare must succeed");
 }
@@ -210,6 +211,7 @@ fn call_through_function_pointer_ok() {
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     table.declare(sym, &mut ctx).expect("declare must succeed");
     let e = call(ident("fp", 1), vec![int_lit(5, 2)], 3);
@@ -234,6 +236,7 @@ fn call_non_function_is_error() {
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     table.declare(sym, &mut ctx).expect("declare must succeed");
     let e = call(ident("x", 1), Vec::new(), 2);

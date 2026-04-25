@@ -396,6 +396,200 @@ fn function_variadic_abstract_first_param() {
 }
 
 // =========================================================================
+// Anonymous parameters with shape (regression for the Phase 4 fix-up)
+// =========================================================================
+//
+// Until Phase 4 fix-up, `parse_param_decl` parsed the abstract declarator
+// of an unnamed parameter and then *discarded* it, so `void g(int *);`
+// silently degraded to `void g(int);`.  These tests pin down the
+// post-fix shape so the bug can't sneak back in.
+
+/// Convenience: extract the function declarator's parameter list.
+fn function_params(d: &Declaration) -> &[ParamDecl] {
+    let id = sole_init_decl(d);
+    let DirectDeclarator::Function { params, .. } = &id.declarator.direct else {
+        panic!("expected function declarator");
+    };
+    params
+}
+
+#[test]
+fn anonymous_pointer_parameter() {
+    let d = parse_decl("void g(int *);");
+    let params = function_params(&d);
+    assert_eq!(params.len(), 1);
+    assert!(params[0].declarator.is_none());
+    let abs = params[0]
+        .abstract_declarator
+        .as_ref()
+        .expect("anonymous param must carry an abstract declarator");
+    assert_eq!(abs.pointers.len(), 1);
+    assert!(abs.pointers[0].qualifiers.is_empty());
+    assert!(abs.direct.is_none());
+}
+
+#[test]
+fn anonymous_pointer_to_pointer_parameter() {
+    let d = parse_decl("void g(int **);");
+    let params = function_params(&d);
+    assert_eq!(params.len(), 1);
+    let abs = params[0]
+        .abstract_declarator
+        .as_ref()
+        .expect("anonymous param must carry an abstract declarator");
+    assert_eq!(abs.pointers.len(), 2, "two pointer levels");
+    assert!(abs.direct.is_none());
+}
+
+#[test]
+fn anonymous_pointer_to_const_int_parameter() {
+    // `const` here qualifies the pointee, not the pointer; it lives on
+    // the parameter's specifiers, not on the abstract declarator.
+    let d = parse_decl("void g(const int *);");
+    let params = function_params(&d);
+    assert!(params[0]
+        .specifiers
+        .type_qualifiers
+        .iter()
+        .any(|q| matches!(q, TypeQualifier::Const)));
+    let abs = params[0]
+        .abstract_declarator
+        .as_ref()
+        .expect("anonymous param must carry an abstract declarator");
+    assert_eq!(abs.pointers.len(), 1);
+    assert!(
+        abs.pointers[0].qualifiers.is_empty(),
+        "const belongs on the pointee, not the pointer prefix"
+    );
+}
+
+#[test]
+fn multiple_anonymous_pointer_parameters() {
+    let d = parse_decl("void g(int *, char *, double *);");
+    let params = function_params(&d);
+    assert_eq!(params.len(), 3);
+    for (i, p) in params.iter().enumerate() {
+        assert!(p.declarator.is_none(), "param {i} should be anonymous");
+        let abs = p
+            .abstract_declarator
+            .as_ref()
+            .unwrap_or_else(|| panic!("param {i} missing abstract declarator"));
+        assert_eq!(abs.pointers.len(), 1, "param {i} pointer level");
+        assert!(
+            abs.direct.is_none(),
+            "param {i} has no array/function suffix"
+        );
+    }
+    assert!(matches!(
+        params[0].specifiers.type_specifiers.as_slice(),
+        [TypeSpecifierToken::Int]
+    ));
+    assert!(matches!(
+        params[1].specifiers.type_specifiers.as_slice(),
+        [TypeSpecifierToken::Char]
+    ));
+    assert!(matches!(
+        params[2].specifiers.type_specifiers.as_slice(),
+        [TypeSpecifierToken::Double]
+    ));
+}
+
+#[test]
+fn mixed_anonymous_and_named_pointer_parameters() {
+    let d = parse_decl("void g(int *p, char *, double *q);");
+    let params = function_params(&d);
+    assert_eq!(params.len(), 3);
+
+    // p: named pointer
+    let dp = params[0].declarator.as_ref().expect("param 0 named");
+    assert_eq!(direct_ident(&dp.direct), "p");
+    assert_eq!(dp.pointers.len(), 1);
+    assert!(params[0].abstract_declarator.is_none());
+
+    // anonymous middle
+    assert!(params[1].declarator.is_none());
+    let mid = params[1]
+        .abstract_declarator
+        .as_ref()
+        .expect("middle param abstract");
+    assert_eq!(mid.pointers.len(), 1);
+
+    // q: named pointer
+    let dq = params[2].declarator.as_ref().expect("param 2 named");
+    assert_eq!(direct_ident(&dq.direct), "q");
+    assert_eq!(dq.pointers.len(), 1);
+    assert!(params[2].abstract_declarator.is_none());
+}
+
+#[test]
+fn anonymous_pointer_with_qualifier_after_star() {
+    // `int * const` — the pointer itself is const-qualified (the
+    // pointee is plain int).  The qualifier rides on the pointer-prefix
+    // entry, not on the parameter's specifiers.
+    let d = parse_decl("void g(int * const);");
+    let params = function_params(&d);
+    let abs = params[0]
+        .abstract_declarator
+        .as_ref()
+        .expect("anonymous param must carry an abstract declarator");
+    assert_eq!(abs.pointers.len(), 1);
+    assert!(
+        abs.pointers[0]
+            .qualifiers
+            .iter()
+            .any(|q| matches!(q, TypeQualifier::Const)),
+        "const after `*` belongs to the pointer prefix"
+    );
+    // And the parameter's outer specifiers must NOT carry that const.
+    assert!(
+        !params[0]
+            .specifiers
+            .type_qualifiers
+            .iter()
+            .any(|q| matches!(q, TypeQualifier::Const)),
+        "outer const would mean the pointee, not the pointer"
+    );
+}
+
+#[test]
+fn anonymous_pointer_to_function_parameter() {
+    // `int (*)(int)` — pointer to function taking int returning int.
+    // After the fix this should round-trip through the abstract path
+    // without losing either the `*` or the inner `(int)` suffix.
+    let d = parse_decl("void g(int (*)(int));");
+    let params = function_params(&d);
+    assert_eq!(params.len(), 1);
+    let abs = params[0]
+        .abstract_declarator
+        .as_ref()
+        .expect("anonymous param must carry an abstract declarator");
+    // Outer pointer prefix is empty; the `*` is inside the parens.
+    assert!(abs.pointers.is_empty());
+    let direct = abs
+        .direct
+        .as_ref()
+        .expect("function pointer has a direct part");
+    let DirectAbstractDeclarator::Function { base, params, .. } = direct else {
+        panic!("expected function suffix at the outermost direct part, got {direct:?}");
+    };
+    // Inner parens hold the `(*)` — pointer-to-something.
+    let inner_base = base
+        .as_ref()
+        .expect("function-pointer abstract has a parenthesised base");
+    let DirectAbstractDeclarator::Parenthesized(inner) = inner_base.as_ref() else {
+        panic!("expected `(*)` parenthesised abstract, got {inner_base:?}");
+    };
+    assert_eq!(inner.pointers.len(), 1, "the inner `*`");
+    assert!(inner.direct.is_none());
+    // The function suffix takes one `int` parameter.
+    assert_eq!(params.len(), 1);
+    assert!(matches!(
+        params[0].specifiers.type_specifiers.as_slice(),
+        [TypeSpecifierToken::Int]
+    ));
+}
+
+// =========================================================================
 // Array declarators
 // =========================================================================
 

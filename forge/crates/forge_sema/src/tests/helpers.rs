@@ -286,6 +286,7 @@ pub fn h_func_decl_void(name: &str) -> Declarator {
                 specifiers: h_void_specs(),
                 declarator: None,
                 span: HS,
+                abstract_declarator: None,
             }],
             is_variadic: false,
             span: HS,
@@ -303,6 +304,7 @@ pub fn h_func_decl_int_params(name: &str, param_names: &[&str]) -> Declarator {
             specifiers: h_int_specs(),
             declarator: Some(h_ident_decl(pname)),
             span: HS,
+            abstract_declarator: None,
         })
         .collect();
     Declarator {

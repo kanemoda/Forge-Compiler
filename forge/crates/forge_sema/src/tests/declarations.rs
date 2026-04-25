@@ -88,6 +88,7 @@ fn func_decl_void(name: &str) -> Declarator {
                 specifiers: specs(vec![TypeSpecifierToken::Void]),
                 declarator: None,
                 span: S,
+                abstract_declarator: None,
             }],
             is_variadic: false,
             span: S,

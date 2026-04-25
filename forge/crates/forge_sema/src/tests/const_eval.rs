@@ -427,6 +427,7 @@ fn reference_to_plain_variable_errors() {
                 is_inline: false,
                 is_noreturn: false,
                 has_noreturn_attr: false,
+                address_taken: false,
             },
             &mut ctx,
         )
@@ -529,6 +530,7 @@ fn declare_enum_constant(
                 is_inline: false,
                 is_noreturn: false,
                 has_noreturn_attr: false,
+                address_taken: false,
             },
             ctx,
         )

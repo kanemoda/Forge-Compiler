@@ -102,6 +102,7 @@ fn typedef_symbol(name: &str, ty: QualType) -> Symbol {
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     }
 }
 
@@ -118,6 +119,7 @@ fn function_symbol(name: &str, ty: QualType, is_noreturn: bool) -> Symbol {
         is_inline: false,
         is_noreturn,
         has_noreturn_attr: is_noreturn,
+        address_taken: false,
     }
 }
 

@@ -48,6 +48,7 @@ use forge_parser::ast::{
 use forge_parser::ast_ops::AssignOp;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::address_taken::analyze_address_taken;
 use crate::const_eval::eval_icx_as_i64;
 use crate::context::SemaContext;
 use crate::declare::{analyze_declaration, analyze_static_assert};
@@ -619,6 +620,7 @@ pub fn analyze_function_def(
         is_inline,
         is_noreturn,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     let _ = table.declare(sym, ctx);
 
@@ -668,6 +670,12 @@ pub fn analyze_function_def(
         );
     }
 
+    // Address-taken analysis runs after type-checking has populated the
+    // side tables on `ctx`, but before the function scope is popped so
+    // that `symbol_refs` lookups still resolve against the same symbol
+    // ids the type checker recorded.
+    analyze_address_taken(&func.body, table, ctx);
+
     table.pop_scope();
 }
 
@@ -716,6 +724,7 @@ fn declare_parameters(
             is_inline: false,
             is_noreturn: false,
             has_noreturn_attr: false,
+            address_taken: false,
         };
         let _ = table.declare(sym, ctx);
     }

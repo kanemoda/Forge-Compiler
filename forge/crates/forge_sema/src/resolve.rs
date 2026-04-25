@@ -780,9 +780,13 @@ fn build_function_layer(
         params,
         [
             ParamDecl {
-                specifiers, declarator, ..
+                specifiers,
+                declarator,
+                abstract_declarator,
+                ..
             },
         ] if declarator.is_none()
+            && abstract_declarator.is_none()
             && specifiers.type_specifiers.iter().any(|t| matches!(t, TypeSpecifierToken::Void))
             && specifiers.type_specifiers.len() == 1
             && specifiers.storage_class.is_none()
@@ -822,11 +826,15 @@ fn resolve_param_decl(
     // contained `static` inside the brackets.
     let has_static_size = outermost_array_has_static(param);
 
-    let (name, ty) = match &param.declarator {
-        Some(decl) => resolve_declarator(
+    let (name, ty) = match (&param.declarator, &param.abstract_declarator) {
+        (Some(decl), _) => resolve_declarator(
             base, decl, /* is_parameter = */ true, table, target, ctx,
         )?,
-        None => (None, base),
+        (None, Some(abs)) => (
+            None,
+            resolve_abstract_declarator(base, abs, table, target, ctx)?,
+        ),
+        (None, None) => (None, base),
     };
 
     // C17 §6.7.6.3: a parameter of type function-returning-T adjusts to

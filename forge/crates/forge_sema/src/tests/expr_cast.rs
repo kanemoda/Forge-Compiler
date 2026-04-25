@@ -99,6 +99,7 @@ fn declare_var(table: &mut SymbolTable, name: &str, ty: QualType, ctx: &mut Sema
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     table.declare(sym, ctx).expect("declare must succeed");
 }
@@ -198,5 +199,112 @@ fn cast_float_to_int_records_float_to_int() {
     assert_eq!(
         ctx.implicit_convs.get(&1),
         Some(&ImplicitConversion::FloatToInt { to: int() })
+    );
+}
+
+// =========================================================================
+// `(void)expr` is the explicit-discard cast — C17 §6.5.4p2
+// =========================================================================
+//
+// These tests guard against a regression where the cast checker rejected
+// `(void)struct_lvalue` because the "cannot cast from a struct or union
+// type" rule fired *before* the void-target short-circuit.
+
+#[test]
+fn void_cast_of_struct_lvalue_is_ok() {
+    super::helpers::assert_source_clean(
+        r#"
+            struct S { int a; };
+            void f(void) {
+                struct S s;
+                (void)s;
+            }
+        "#,
+    );
+}
+
+#[test]
+fn void_cast_of_union_lvalue_is_ok() {
+    super::helpers::assert_source_clean(
+        r#"
+            union U { int i; float f; };
+            void f(void) {
+                union U u;
+                (void)u;
+            }
+        "#,
+    );
+}
+
+#[test]
+fn void_cast_of_int_is_ok() {
+    // Regression guard — this case worked before the fix and must keep
+    // working.
+    super::helpers::assert_source_clean(
+        r#"
+            void f(void) {
+                int x = 5;
+                (void)x;
+            }
+        "#,
+    );
+}
+
+#[test]
+fn void_cast_of_function_call_is_ok() {
+    // The canonical "discard return value" idiom.
+    super::helpers::assert_source_clean(
+        r#"
+            int f(void);
+            void g(void) {
+                (void)f();
+            }
+        "#,
+    );
+}
+
+#[test]
+fn void_cast_of_void_is_ok() {
+    // Edge case: discarding the (already-void) result of a void
+    // function.  No real value to throw away, but the cast must still
+    // type-check cleanly.
+    super::helpers::assert_source_clean(
+        r#"
+            void f(void);
+            void g(void) {
+                (void)f();
+            }
+        "#,
+    );
+}
+
+#[test]
+fn non_void_cast_of_struct_is_still_error() {
+    // Regression guard: the void short-circuit must not accidentally
+    // allow a struct source for non-void casts.
+    super::helpers::assert_source_has_errors(
+        r#"
+            struct S { int a; };
+            int g(void) {
+                struct S s;
+                return (int)s;
+            }
+        "#,
+    );
+}
+
+#[test]
+fn non_void_cast_to_struct_is_still_error() {
+    // Regression guard: target struct is forbidden regardless of how
+    // the void special case is handled.
+    super::helpers::assert_source_has_errors(
+        r#"
+            struct S { int a; };
+            void f(void) {
+                int x = 5;
+                struct S s = (struct S)x;
+                (void)s;
+            }
+        "#,
     );
 }

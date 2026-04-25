@@ -208,6 +208,7 @@ pub fn complete_enum(
             is_inline: false,
             is_noreturn: false,
             has_noreturn_attr: false,
+            address_taken: false,
         };
         let _ = table.declare(sym, ctx);
 

@@ -27,6 +27,7 @@ fn sym(name: &str, ty: QualType, kind: SymbolKind) -> Symbol {
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     }
 }
 
@@ -43,6 +44,7 @@ fn sym_extern(name: &str, ty: QualType) -> Symbol {
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     }
 }
 

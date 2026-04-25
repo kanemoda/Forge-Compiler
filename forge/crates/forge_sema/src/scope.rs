@@ -142,6 +142,14 @@ pub struct Symbol {
     /// the purposes of control-flow analysis but kept separate so
     /// diagnostics can attribute the source correctly.
     pub has_noreturn_attr: bool,
+    /// `true` if the address of this declaration may have escaped the
+    /// function body — i.e. somewhere in scope `&local` or array-to-
+    /// pointer decay was applied to it.  Only meaningful on locals
+    /// ([`SymbolKind::Variable`] with [`StorageClass::None`] and
+    /// [`Linkage::None`]); for globals and parameters the flag stays at
+    /// its `false` default and Phase 5 IR lowering treats those as
+    /// unconditionally memory-resident anyway.
+    pub address_taken: bool,
 }
 
 // =========================================================================
@@ -353,6 +361,15 @@ impl SymbolTable {
     /// definition rules before calling.
     pub fn mark_defined(&mut self, id: SymbolId) {
         self.all_symbols[id as usize].is_defined = true;
+    }
+
+    /// Set `address_taken` to `true` for the given symbol.  Idempotent.
+    ///
+    /// Called by [`crate::address_taken::analyze_address_taken`] each
+    /// time it discovers a `&local` or array-decay site referencing
+    /// this symbol.  Repeated calls collapse — the flag is monotone.
+    pub fn mark_address_taken(&mut self, id: SymbolId) {
+        self.all_symbols[id as usize].address_taken = true;
     }
 
     // ---- tag namespace ----

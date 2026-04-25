@@ -110,6 +110,7 @@ fn declare_var(table: &mut SymbolTable, name: &str, ty: QualType, ctx: &mut Sema
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     table.declare(sym, ctx).expect("declare must succeed");
 }
@@ -185,6 +186,7 @@ fn sizeof_function_type_is_error() {
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     table.declare(sym, &mut ctx).expect("declare must succeed");
 

@@ -297,12 +297,27 @@ pub enum ArraySize {
 }
 
 /// A single parameter declaration inside a function declarator.
+///
+/// At most one of `declarator` / `abstract_declarator` is `Some`:
+///
+/// * `declarator: Some(_)` — the source had a named parameter, e.g.
+///   `int x` or `int *p`.
+/// * `abstract_declarator: Some(_)` — the source had an unnamed
+///   parameter that nonetheless carries pointer/array/function shape,
+///   e.g. `int *`, `const char *`, `int (*)(int)`.
+/// * Both `None` — the source had a bare type-specifier with no
+///   declarator at all, e.g. `int` in `void foo(int, int)`.
 #[derive(Clone, Debug)]
 pub struct ParamDecl {
     /// Type specifiers and qualifiers.
     pub specifiers: DeclSpecifiers,
-    /// `None` for abstract parameters: `void foo(int, int)`.
+    /// Concrete (named) declarator.  `None` if the parameter has no
+    /// identifier in the source.
     pub declarator: Option<Declarator>,
+    /// Abstract declarator, used when the parameter has no name but
+    /// still carries pointer/array/function shape.  `None` whenever
+    /// `declarator` is `Some` or the parameter was a bare specifier.
+    pub abstract_declarator: Option<AbstractDeclarator>,
     /// Span covering the parameter.
     pub span: Span,
 }

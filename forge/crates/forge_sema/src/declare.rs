@@ -215,6 +215,7 @@ fn analyze_typedef_declarator(
         is_inline: false,
         is_noreturn: false,
         has_noreturn_attr: false,
+        address_taken: false,
     };
     let _ = table.declare(sym, ctx);
 }
@@ -286,6 +287,7 @@ fn analyze_object_or_function_declarator(
         is_inline: is_inline && is_function,
         is_noreturn: is_noreturn && is_function,
         has_noreturn_attr: false,
+        address_taken: false,
     };
 
     let _ = table.declare(sym, ctx);

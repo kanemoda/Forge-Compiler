@@ -7,6 +7,7 @@
 
 mod helpers;
 
+mod address_taken;
 mod arithmetic_conversions;
 mod attribute_aligned;
 mod attribute_noreturn;

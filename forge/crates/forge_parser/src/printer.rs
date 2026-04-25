@@ -294,9 +294,10 @@ impl Printer {
         self.line("ParamDecl");
         self.with_indent(|pp| {
             pp.specifiers("Specifiers", &p.specifiers);
-            match &p.declarator {
-                Some(d) => pp.declarator(d),
-                None => pp.line("(abstract)"),
+            match (&p.declarator, &p.abstract_declarator) {
+                (Some(d), _) => pp.declarator(d),
+                (None, Some(abs)) => pp.abstract_declarator(abs),
+                (None, None) => pp.line("(abstract)"),
             }
         });
     }

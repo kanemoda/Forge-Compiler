@@ -340,6 +340,7 @@ fn typedef_name_resolves_to_its_aliased_type() {
                 is_inline: false,
                 is_noreturn: false,
                 has_noreturn_attr: false,
+                address_taken: false,
             },
             &mut ctx,
         )
@@ -374,6 +375,7 @@ fn typedef_name_combined_with_int_is_an_error() {
                 is_inline: false,
                 is_noreturn: false,
                 has_noreturn_attr: false,
+                address_taken: false,
             },
             &mut ctx,
         )

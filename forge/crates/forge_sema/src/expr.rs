@@ -1704,7 +1704,15 @@ fn check_cast(
         return QualType::unqualified(Type::Int { is_unsigned: false });
     };
 
-    // Reject illegal target kinds first.
+    // C17 §6.5.4p2 — `(void)expr` is the explicit-discard cast and is
+    // legal for any expression regardless of its type.  This must be
+    // checked BEFORE the struct/union source rejection below, otherwise
+    // `(void)struct_lvalue` is wrongly diagnosed as a bad source type.
+    if matches!(target_ty.ty, Type::Void) {
+        return target_ty;
+    }
+
+    // Reject illegal target kinds.
     if matches!(target_ty.ty, Type::Array { .. }) {
         ctx.emit(error("cannot cast to an array type", span));
         return target_ty;
@@ -1719,11 +1727,6 @@ fn check_cast(
     }
     if inner_ty.ty.is_struct_or_union() {
         ctx.emit(error("cannot cast from a struct or union type", span));
-        return target_ty;
-    }
-
-    // void cast: explicit discard is always permitted (§6.5.4p2).
-    if matches!(target_ty.ty, Type::Void) {
         return target_ty;
     }
 

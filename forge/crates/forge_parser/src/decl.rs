@@ -1197,24 +1197,22 @@ impl Parser {
     }
 
     /// Parse a single parameter declaration: specifiers then an
-    /// optional declarator (concrete) or abstract-declarator.
+    /// optional declarator (concrete or abstract).
     ///
-    /// In the AST, abstract-declarators collapse to `declarator: None` —
-    /// full abstract-declarator structure in parameters is deferred
-    /// until a later phase.
+    /// Either `declarator` or `abstract_declarator` may be `Some`, but
+    /// never both.  A bare specifier (`void f(int)`) leaves both `None`.
     fn parse_param_decl(&mut self) -> ParamDecl {
         let start = self.peek().span;
         let specifiers = self.parse_declaration_specifiers();
 
-        let declarator = if self.at(&TokenKind::RightParen) || self.at(&TokenKind::Comma) {
-            None
-        } else if self.looks_like_concrete_param_declarator() {
-            Some(self.parse_declarator())
-        } else {
-            // Abstract declarator — parsed then discarded (3.3 limit).
-            let _ = self.parse_abstract_declarator_opt();
-            None
-        };
+        let (declarator, abstract_declarator) =
+            if self.at(&TokenKind::RightParen) || self.at(&TokenKind::Comma) {
+                (None, None)
+            } else if self.looks_like_concrete_param_declarator() {
+                (Some(self.parse_declarator()), None)
+            } else {
+                (None, self.parse_abstract_declarator_opt())
+            };
 
         // Attributes on a parameter appear after the declarator:
         // `int f(int x __attribute__((unused)))` and
@@ -1224,6 +1222,7 @@ impl Parser {
         ParamDecl {
             specifiers,
             declarator,
+            abstract_declarator,
             span: self.span_from(start),
         }
     }
